@@ -193,13 +193,31 @@ export function getPendapatanTPTetap(service: Service): number {
 
 /**
  * Pendapatan TP untuk Poles (dinamis, selalu hidrolik)
- * = harga - kasDefault - upah_washer_cuci(kategoriMobil, hidrolik)
+ * Dua bentuk panggilan yang didukung:
+ *   getPendapatanTPPoles(service, kategoriMobil)
+ *   getPendapatanTPPoles(harga, kasDefault, kategoriMobil)  ← legacy, masih didukung
  */
 export function getPendapatanTPPoles(
-  harga: number,
-  kasDefault: number,
-  kategoriMobil: KategoriMobil
+  serviceOrHarga: Service | number,
+  kasDefaultOrKat: number | KategoriMobil,
+  kategoriMobilOpt?: KategoriMobil
 ): number {
+  let harga: number;
+  let kasDefault: number;
+  let kategoriMobil: KategoriMobil;
+
+  if (typeof serviceOrHarga === 'object') {
+    // Bentuk baru: (service, kategoriMobil)
+    harga       = serviceOrHarga.harga as number;
+    kasDefault  = serviceOrHarga.kasDefault || 0;
+    kategoriMobil = kasDefaultOrKat as KategoriMobil;
+  } else {
+    // Bentuk lama: (harga, kasDefault, kategoriMobil)
+    harga       = serviceOrHarga;
+    kasDefault  = kasDefaultOrKat as number;
+    kategoriMobil = kategoriMobilOpt!;
+  }
+
   const upahWasherCuci = WASHER_UPAH[kategoriMobil]['hidrolik'];
   return harga - kasDefault - upahWasherCuci;
 }
@@ -215,11 +233,8 @@ export function getPendapatanTP(
   _unused?: 'express' | 'hidrolik'
 ): number {
   if (service.isPolesDinamis && kategoriMobil) {
-    return getPendapatanTPPoles(
-      service.harga as number,
-      service.kasDefault || 0,
-      kategoriMobil
-    );
+    // Gunakan bentuk (service, kategoriMobil)
+    return getPendapatanTPPoles(service, kategoriMobil);
   }
   return getPendapatanTPTetap(service);
 }

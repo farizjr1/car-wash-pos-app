@@ -99,9 +99,17 @@ export default function KasirScreen() {
   // Aggregates
   const totalOmset   = SERVICES.reduce((sum, s) => sum + getQty(s.id) * (s.harga as number), 0);
   const totalKas     = SERVICES.reduce((sum, s) => sum + getQty(s.id) * (s.kasDefault || 0), 0);
-  const totalWasher  = SERVICES
-    .filter(s => !KATEGORI_BUTUH_TP.includes(s.kategori))
-    .reduce((sum, s) => sum + getQty(s.id) * getPendapatanWasher(s.harga as number, s.kasDefault || 0), 0);
+  // Washer reguler: harga - KAS | Washer Premium/Paket: upahWasherTP | Washer Poles: WASHER_UPAH hidrolik
+  const totalWasher = SERVICES.reduce((sum, s) => {
+    const qty = getQty(s.id); if (!qty) return sum;
+    if (s.isPolesDinamis) {
+      const kat = katMap[s.id];
+      return kat ? sum + qty * WASHER_UPAH[kat]['hidrolik'] : sum;
+    } else if (s.hasTP) {
+      return sum + qty * (s.upahWasherTP || 0);
+    }
+    return sum + qty * getPendapatanWasher(s.harga as number, s.kasDefault || 0);
+  }, 0);
   const totalTP = SERVICES
     .filter(s => KATEGORI_BUTUH_TP.includes(s.kategori))
     .reduce((sum, s) => {
@@ -139,7 +147,17 @@ export default function KasirScreen() {
         const jumlah = qty * harga;
         const isTP   = !!s.hasTP;
         const namaTP = tpMap[s.id] || '';
-        const pendWasher = isTP ? 0 : getPendapatanWasher(harga, s.kasDefault || 0) * qty;
+        let pendWasher: number;
+        if (s.isPolesDinamis) {
+          // Poles: washer = upah cuci hidrolik berdasar kategori mobil
+          const kat = katMap[s.id] || 'umum';
+          pendWasher = WASHER_UPAH[kat]['hidrolik'] * qty;
+        } else if (s.hasTP) {
+          // Premium/Paket: washer dapat upahWasherTP
+          pendWasher = (s.upahWasherTP || 0) * qty;
+        } else {
+          pendWasher = getPendapatanWasher(harga, s.kasDefault || 0) * qty;
+        }
         const pendTP     = isTP ? calcTP(s, katMap[s.id]) * qty : 0;
 
         await blink.db.closingItems.create({

@@ -8,6 +8,9 @@ export interface ClosingItem {
   qty: number;
   kas: number;
   jumlah: number;
+  namaTP?: string;
+  pendapatanWasher?: number;
+  pendapatanTP?: number;
 }
 
 export interface Pengeluaran {
