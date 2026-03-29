@@ -26,7 +26,6 @@ interface AntrianItem {
   ket: string; status: string; createdAt: string;
 }
 
-const WASHER_LIST = ['Anto', 'Budi', 'Dedi', 'Eko', 'Fajar', 'Guntur', 'Hendra'];
 const KAT_MOBIL_OPTIONS: { value: KategoriMobil; label: string; color: string }[] = [
   { value: 'umum',    label: 'Umum / Medium',  color: '#059669' },
   { value: 'big',     label: 'Besar / Big',    color: '#DC2626' },
@@ -82,14 +81,61 @@ export default function AntrianScreen() {
   const [formTPName, setFormTPName] = useState('');
   const [showCustomTP, setShowCustomTP] = useState(false);
   const [customTPName, setCustomTPName] = useState('');
+  const [formIsFree, setFormIsFree] = useState(false);
 
   const [selectedItem, setSelectedItem] = useState<AntrianItem | null>(null);
 
+  // ── DB: Karyawan aktif ──
+  const { data: karyawanList } = useQuery({
+    queryKey: ['karyawan'],
+    queryFn: async () => {
+      const res = await blink.db.karyawan.list({ where: { aktif: '1' }, orderBy: { nama: 'asc' } });
+      return res as any[];
+    },
+  });
+  const washerList = karyawanList?.filter((k: any) => k.peran === 'washer' || k.peran === 'both').map((k: any) => k.nama) || [];
+  const tpList    = karyawanList?.filter((k: any) => k.peran === 'tp'     || k.peran === 'both').map((k: any) => k.nama) || [];
+
+  // ── DB: Car models ──
+  const { data: dbCars } = useQuery({
+    queryKey: ['car_models'],
+    queryFn: async () => {
+      const res = await blink.db.carModels.list({ where: { aktif: '1' }, orderBy: { nama: 'asc' } });
+      return res as any[];
+    },
+  });
+
+  // ── DB: App settings ──
+  const { data: settingsList } = useQuery({
+    queryKey: ['app_settings'],
+    queryFn: async () => {
+      const res = await blink.db.appSettings.list();
+      return res as any[];
+    },
+  });
+  const kasirAktif = settingsList?.find((s: any) => s.key === 'kasir_aktif')?.value || '';
+  const shiftAktif = settingsList?.find((s: any) => s.key === 'shift_aktif')?.value || '1';
+
+  // ── Gabung ALL_CARS + dbCars (deduplikasi) ──
+  const allCarsList = useMemo(() => {
+    const dbCarList = (dbCars || []).map((c: any) => ({
+      model: c.nama,
+      kategori: c.kategori as KategoriMobil,
+    }));
+    const combined = [...ALL_CARS, ...dbCarList];
+    const seen = new Set<string>();
+    return combined.filter(c => {
+      if (seen.has(c.model)) return false;
+      seen.add(c.model);
+      return true;
+    }).sort((a, b) => a.model.localeCompare(b.model));
+  }, [dbCars]);
+
   const filteredCars = useMemo(() => {
     const q = modelSearch.trim().toLowerCase();
-    if (!q) return ALL_CARS;
-    return ALL_CARS.filter(c => c.model.toLowerCase().includes(q));
-  }, [modelSearch]);
+    if (!q) return allCarsList;
+    return allCarsList.filter(c => c.model.toLowerCase().includes(q));
+  }, [modelSearch, allCarsList]);
 
   const { data: antrian, isLoading } = useQuery({
     queryKey: ['antrian', today],
@@ -100,7 +146,7 @@ export default function AntrianScreen() {
   });
 
   const nomorBerikut = (antrian?.length || 0) + 1;
-  const totalOmset   = antrian?.reduce((sum, a) => sum + (a.harga || 0), 0) || 0;
+  const totalOmset   = antrian?.reduce((sum, a) => sum + (Number((a as any).isFree) > 0 ? 0 : (a.harga || 0)), 0) || 0;
   const totalSelesai = antrian?.filter(a => a.status === 'selesai').length || 0;
   const totalUpah    = antrian?.reduce((sum, a) => sum + ((a as any).upahWasher || 0), 0) || 0;
   const totalTP      = antrian?.reduce((sum, a) => sum + ((a as any).pendapatanTP || 0), 0) || 0;
@@ -170,12 +216,13 @@ export default function AntrianScreen() {
         serviceId: formServiceId,
         serviceName: formServiceName,
         kategori: formKategori,
-        harga: formHarga,
+        harga: formIsFree ? 0 : formHarga,
         namaWasher: washer,
-        upahWasher: formUpahWasher,
+        upahWasher: formIsFree ? 0 : formUpahWasher,
         namaTP: namaTP || '',
-        pendapatanTP: formPendapatanTP,
+        pendapatanTP: formIsFree ? 0 : formPendapatanTP,
         ket: formKet.trim(),
+        isFree: formIsFree ? 1 : 0,
         status: 'antri',
       });
     },
@@ -200,6 +247,7 @@ export default function AntrianScreen() {
     setCustomWasher(''); setShowCustomWasher(false); setFormSelectedService(null);
     setFormPendapatanTP(0); setFormTPName(''); setShowCustomTP(false);
     setCustomTPName(''); setShowServicePicker(false); setPolesKatMobil(null);
+    setFormIsFree(false);
     setModalVisible(true);
   };
   const closeModal = () => setModalVisible(false);
@@ -226,10 +274,18 @@ export default function AntrianScreen() {
           <Text style={s.headerTitle}>ANTRIAN CUCI</Text>
           <Text style={s.headerSub}>{formatDateDisplay(today)} · Orange Carwash</Text>
         </View>
-        <TouchableOpacity style={s.addBtn} onPress={openModal}>
-          <Ionicons name="add" size={20} color="#fff" />
-          <Text style={s.addBtnText}>Tambah</Text>
-        </TouchableOpacity>
+        <View style={s.headerRight}>
+          {kasirAktif ? (
+            <View style={s.kasirBadge}>
+              <Ionicons name="person-circle-outline" size={12} color="#FED7AA" />
+              <Text style={s.kasirBadgeText}>{kasirAktif} · S{shiftAktif}</Text>
+            </View>
+          ) : null}
+          <TouchableOpacity style={s.addBtn} onPress={openModal}>
+            <Ionicons name="add" size={20} color="#fff" />
+            <Text style={s.addBtnText}>Tambah</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Stats */}
@@ -274,10 +330,11 @@ export default function AntrianScreen() {
           data={antrian} keyExtractor={item => item.id}
           contentContainerStyle={{ paddingBottom: 60 }}
           renderItem={({ item }) => {
-            const katColor  = getKatColor((item as any).kategoriMobil);
+            const katColor   = getKatColor((item as any).kategoriMobil);
             const upahWasher = (item as any).upahWasher || 0;
-            const pendTP    = (item as any).pendapatanTP || 0;
-            const namaTP    = (item as any).namaTP || '';
+            const pendTP     = (item as any).pendapatanTP || 0;
+            const namaTP     = (item as any).namaTP || '';
+            const isFreeItem = Number((item as any).isFree) > 0;
             return (
               <TouchableOpacity style={[s.tableRow, item.status === 'selesai' && s.tableRowDone]}
                 onPress={() => setSelectedItem(item)} activeOpacity={0.7}>
@@ -294,8 +351,13 @@ export default function AntrianScreen() {
                   ) : null}
                   <Text style={[s.tdSvc, item.status === 'selesai' && s.tdDone]} numberOfLines={1}>{item.serviceName}</Text>
                   {namaTP ? <Text style={s.tdTP}>TP: {namaTP}</Text> : null}
+                  {isFreeItem ? (
+                    <View style={s.freeBadge}><Text style={s.freeBadgeText}>FREE</Text></View>
+                  ) : null}
                 </View>
-                <Text style={s.tdPrice}>{fmt(item.harga)}</Text>
+                <Text style={[s.tdPrice, isFreeItem && s.tdPriceFree]}>
+                  {isFreeItem ? 'FREE' : fmt(item.harga)}
+                </Text>
                 <View style={{ width: 52, alignItems: 'flex-end' }}>
                   {upahWasher > 0 && <Text style={s.tdUpah}>{fmt(upahWasher)}</Text>}
                   {pendTP > 0 && <Text style={s.tdTPVal}>TP {fmt(pendTP)}</Text>}
@@ -571,7 +633,7 @@ export default function AntrianScreen() {
             <ScrollView contentContainerStyle={{ padding: 16 }}>
               <Text style={s.stepLbl}>Nama Washer</Text>
               <View style={s.chipGrid}>
-                {WASHER_LIST.map(w => (
+                {washerList.map((w: string) => (
                   <TouchableOpacity
                     key={w}
                     style={[s.chip, formWasher === w && !showCustomWasher && s.chipActive]}
@@ -603,7 +665,7 @@ export default function AntrianScreen() {
                     </View>
                   </View>
                   <View style={s.chipGrid}>
-                    {WASHER_LIST.map(w => (
+                    {tpList.map((w: string) => (
                       <TouchableOpacity
                         key={w}
                         style={[s.chip, s.chipTP, formTPName === w && !showCustomTP && s.chipTPActive]}
@@ -627,6 +689,27 @@ export default function AntrianScreen() {
                 </>
               )}
 
+              {/* Toggle FREE / Gratis */}
+              <TouchableOpacity
+                style={[s.freeToggle, formIsFree && s.freeToggleActive]}
+                onPress={() => setFormIsFree(v => !v)}
+              >
+                <Ionicons name={formIsFree ? 'gift' : 'gift-outline'} size={20} color={formIsFree ? '#fff' : '#DC2626'} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.freeToggleTxt, formIsFree && { color: '#fff' }]}>
+                    {formIsFree ? '✓ CUCI FREE / GRATIS' : 'Tandai sebagai Cuci FREE'}
+                  </Text>
+                  <Text style={[s.freeToggleSub, formIsFree && { color: '#FCA5A5' }]}>
+                    {formIsFree
+                      ? 'Tidak masuk closing, tercatat sebagai pengeluaran'
+                      : 'Untuk karyawan, keluarga, atau pelanggan spesial'}
+                  </Text>
+                </View>
+                <View style={[s.freeCheckbox, formIsFree && s.freeCheckboxActive]}>
+                  {formIsFree && <Ionicons name="checkmark" size={14} color="#fff" />}
+                </View>
+              </TouchableOpacity>
+
               <Text style={[s.stepLbl, { marginTop: 14 }]}>Keterangan (Opsional)</Text>
               <TextInput style={[s.textInput, { height: 65 }]} placeholder="Catatan tambahan..."
                 value={formKet} onChangeText={setFormKet} multiline placeholderTextColor="#9CA3AF" />
@@ -638,9 +721,14 @@ export default function AntrianScreen() {
                 <SumRow label="Model"   value={`${selectedCar?.model} (${KATEGORI_MOBIL_LABEL[selectedCar?.kategori || 'umum']})`} />
                 <SumRow label="Layanan" value={formServiceName} />
                 <View style={s.summaryDiv} />
-                <SumRow label="Harga"        value={`Rp ${fmt(formHarga)}`}        color="#E85D04" />
-                {formUpahWasher > 0 && <SumRow label="Upah Washer" value={`Rp ${fmt(formUpahWasher)}`} color="#059669" />}
-                {needsTP && <SumRow label="Pendapatan TP" value={`Rp ${fmt(formPendapatanTP)}`} color="#A78BFA" />}
+                {formIsFree
+                  ? <SumRow label="Harga" value="FREE / GRATIS" color="#DC2626" />
+                  : <>
+                      <SumRow label="Harga" value={`Rp ${fmt(formHarga)}`} color="#E85D04" />
+                      {formUpahWasher > 0 && <SumRow label="Upah Washer" value={`Rp ${fmt(formUpahWasher)}`} color="#059669" />}
+                      {needsTP && <SumRow label="Pendapatan TP" value={`Rp ${fmt(formPendapatanTP)}`} color="#A78BFA" />}
+                    </>
+                }
               </View>
 
               <TouchableOpacity
@@ -668,10 +756,19 @@ export default function AntrianScreen() {
                   <Text style={s.katBadgeLgText}>{(selectedItem as any).modelMobil} · {selectedItem.jenis}</Text>
                 </View>
               )}
+              {Number((selectedItem as any).isFree) > 0 && (
+                <View style={s.detailFreeBadge}>
+                  <Ionicons name="gift" size={13} color="#fff" />
+                  <Text style={s.detailFreeBadgeText}>CUCI FREE / GRATIS</Text>
+                </View>
+              )}
               <Text style={s.detailNo}>No. {selectedItem.nomor}</Text>
               <View style={s.detailDiv} />
               <DR label="Layanan" value={selectedItem.serviceName} />
-              <DR label="Harga"   value={`Rp ${fmt(selectedItem.harga)}`} vc="#E85D04" />
+              {Number((selectedItem as any).isFree) > 0
+                ? <DR label="Harga" value="FREE / GRATIS" vc="#DC2626" />
+                : <DR label="Harga" value={`Rp ${fmt(selectedItem.harga)}`} vc="#E85D04" />
+              }
               {(selectedItem as any).upahWasher > 0 && (
                 <DR label="Upah Washer" value={`Rp ${fmt((selectedItem as any).upahWasher)}`} vc="#059669" />
               )}
@@ -752,6 +849,9 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#E85D04', paddingHorizontal: 16, paddingVertical: 12 },
   headerTitle: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
   headerSub: { color: '#FED7AA', fontSize: 11, marginTop: 1 },
+  headerRight: { flexDirection: 'column', alignItems: 'flex-end', gap: 4 },
+  kasirBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  kasirBadgeText: { color: '#FED7AA', fontSize: 10, fontWeight: '700' },
   addBtn: { flexDirection: 'row', gap: 6, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, alignItems: 'center' },
   addBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   statsBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB', paddingVertical: 8 },
@@ -770,10 +870,13 @@ const s = StyleSheet.create({
   tdTP: { fontSize: 9, color: '#7C3AED', fontWeight: '600', marginTop: 1 },
   tdDone: { color: '#9CA3AF', textDecorationLine: 'line-through' },
   tdPrice: { width: 56, fontSize: 11, fontWeight: '700', color: '#059669', textAlign: 'right' },
+  tdPriceFree: { color: '#DC2626' },
   tdUpah: { fontSize: 10, fontWeight: '700', color: '#059669' },
   tdTPVal: { fontSize: 9, fontWeight: '700', color: '#7C3AED' },
   katBadge: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
   katBadgeText: { fontSize: 10, fontWeight: '700', color: '#fff' },
+  freeBadge: { backgroundColor: '#DC2626', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
+  freeBadgeText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
   statusPill: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 20 },
   statusPillText: { fontSize: 8, fontWeight: '800', color: '#fff' },
   emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
@@ -863,6 +966,12 @@ const s = StyleSheet.create({
   tpHdrBadge: { backgroundColor: '#EDE9FE', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   tpHdrBadgeText: { fontSize: 11, fontWeight: '800', color: '#7C3AED' },
   textInput: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10, padding: 12, fontSize: 15, color: '#1F2937', marginBottom: 4 },
+  freeToggle: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 12, marginTop: 8, borderWidth: 2, borderColor: '#FECACA' },
+  freeToggleActive: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
+  freeToggleTxt: { fontSize: 13, fontWeight: '700', color: '#DC2626' },
+  freeToggleSub: { fontSize: 10, color: '#EF4444', marginTop: 1 },
+  freeCheckbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DC2626', alignItems: 'center', justifyContent: 'center' },
+  freeCheckboxActive: { backgroundColor: 'rgba(255,255,255,0.3)', borderColor: '#fff' },
   summary: { backgroundColor: '#1F2937', borderRadius: 12, padding: 14, marginVertical: 14 },
   summaryTitle: { color: '#fff', fontSize: 11, fontWeight: '800', marginBottom: 10, letterSpacing: 0.5 },
   summaryDiv: { height: 1, backgroundColor: '#374151', marginVertical: 6 },
@@ -872,17 +981,13 @@ const s = StyleSheet.create({
   saveBtn: { flexDirection: 'row', gap: 8, backgroundColor: '#059669', borderRadius: 12, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
   saveBtnDis: { backgroundColor: '#6EE7B7' },
   saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
-  freeToggle: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 12, marginTop: 8, borderWidth: 2, borderColor: '#FECACA' },
-  freeToggleActive: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
-  freeToggleTxt: { fontSize: 13, fontWeight: '700', color: '#DC2626' },
-  freeToggleSub: { fontSize: 10, color: '#EF4444', marginTop: 1 },
-  freeCheckbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DC2626', alignItems: 'center', justifyContent: 'center' },
-  freeCheckboxActive: { backgroundColor: 'rgba(255,255,255,0.3)', borderColor: '#fff' },
   detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   detailBox: { backgroundColor: '#fff', borderRadius: 20, padding: 20, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
   detailPlate: { backgroundColor: '#F59E0B', paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, borderWidth: 3, borderColor: '#1F2937', alignSelf: 'center' },
   detailPlateText: { fontSize: 22, fontWeight: '900', color: '#1F2937', letterSpacing: 3 },
   detailNo: { textAlign: 'center', fontSize: 12, color: '#9CA3AF', marginTop: 4, marginBottom: 8 },
+  detailFreeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#DC2626', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4, alignSelf: 'center', marginTop: 4 },
+  detailFreeBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
   detailDiv: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 10 },
   detailStatusTitle: { fontSize: 11, fontWeight: '700', color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   detailStatusRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
