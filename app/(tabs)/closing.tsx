@@ -11,50 +11,52 @@ import { ClosingReport } from '@/types/closing';
 
 /**
  * LOGIKA CLOSING:
- *
- * 1. Pengeluaran OTOMATIS (dari data antrian hari ini):
- *    - Cuci FREE    → pengeluaran "free/p.free"  = upah_washer mobil tsb (11K/13K/15K)
- *    - Kategori Big → pengeluaran "big/p.big"    = Rp 2.000 per mobil big
- *    - Kategori Prem (layanan Premium) → pengeluaran "prem/p.prem" = Rp 4.000 per mobil premium
- *
- * 2. Cashless:
- *    - BCA Kolom   = QRIS masuk (bukan transfer BCA biasa)
- *    - Total Cashless = QRIS_BCA + BCA_Transfer + BSI + CIMB_BNI + Mandiri + Voucher
- *                     - Penjualan_Mart - Penjualan_ACC
- *    - Field "Jual Mart" & "Jual ACC" adalah pengurang cashless
- *
- * 3. Pendapatan Total = Total Harga (semua cuci) - Total KAS = Upah Washer + TP
- *
- * 4. Rekap Akhir:
- *    - Omset Bersih = Total KAS - Total Pengeluaran
- *    - Tunai Rill   = Omset Bersih - Total Cashless
+ * 1. Pengeluaran OTOMATIS dari antrian:
+ *    - FREE    → free/p.free  = upah_washer
+ *    - Big     → big/p.big    = Rp 2.000 / mobil
+ *    - Premium → prem/p.prem  = Rp 4.000 / mobil
+ * 2. Total Cashless = QRIS + Transfer - Jual Mart - Jual ACC
+ * 3. Pendapatan = Total Harga − Total KAS = Upah Washer + TP
+ * 4. Omset Bersih = Total KAS − Total Pengeluaran
+ * 5. Tunai Rill   = Omset Bersih − Cashless
  */
 
+// ─── Colors ───────────────────────────────────────────────────────────────────
+const C = {
+  orange:  '#E85D04',
+  orangeL: '#FFF3E0',
+  orangeD: '#BF4800',
+  bg:      '#F4F5F7',
+  dark:    '#0F172A',
+  slate:   '#334155',
+  gray:    '#64748B',
+  grayL:   '#E2E8F0',
+  grayBg:  '#F8FAFC',
+  green:   '#059669',
+  greenBg: '#ECFDF5',
+  red:     '#DC2626',
+  redBg:   '#FEF2F2',
+  purple:  '#7C3AED',
+  purpleBg:'#F5F3FF',
+  yellow:  '#D97706',
+  white:   '#FFFFFF',
+  border:  '#E2E8F0',
+};
+
 function fmt(n: number) { return n.toLocaleString('id-ID'); }
-function getTodayStr()   { return new Date().toISOString().split('T')[0]; }
-function formatDateLong(s: string) {
+function getTodayStr() { return new Date().toISOString().split('T')[0]; }
+function fmtDateLong(s: string) {
   return new Date(s).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-// Upah washer berdasar kategori mobil (reguler)
-const UPAH_WASHER_BY_KAT: Record<string, number> = {
-  umum: 11000,
-  big: 13000,
-  premium: 15000,
-};
+const UPAH_BY_KAT: Record<string, number> = { umum: 11000, big: 13000, premium: 15000 };
 
-interface AutoPengeluaran {
-  jenis: string;
-  harga: number;
-  keterangan: string;
-}
-
-interface PengItem { jenis: string; harga: string }
+interface AutoPeng { jenis: string; harga: number; ket: string }
+interface PengItem  { jenis: string; harga: string }
 
 export default function ClosingScreen() {
-  const queryClient = useQueryClient();
+  const qc = useQueryClient();
 
-  // ── Fetch latest open closing report ──
   const { data: reports } = useQuery({
     queryKey: ['closing_reports'],
     queryFn: async () => {
@@ -65,7 +67,6 @@ export default function ClosingScreen() {
 
   const latestOpen = reports?.find(r => r.status === 'open');
 
-  // ── Fetch closing items ──
   const { data: items } = useQuery({
     queryKey: ['closing_items', latestOpen?.id],
     queryFn: async () => {
@@ -75,7 +76,6 @@ export default function ClosingScreen() {
     enabled: !!latestOpen?.id,
   });
 
-  // ── Fetch antrian hari ini (untuk auto-pengeluaran) ──
   const today = latestOpen?.tanggal || getTodayStr();
   const { data: antrian } = useQuery({
     queryKey: ['antrian_closing', today],
@@ -86,7 +86,6 @@ export default function ClosingScreen() {
     enabled: !!latestOpen,
   });
 
-  // ── Fetch existing pengeluaran (sudah tersimpan) ──
   const { data: savedPeng } = useQuery({
     queryKey: ['pengeluaran', latestOpen?.id],
     queryFn: async () => {
@@ -96,148 +95,101 @@ export default function ClosingScreen() {
     enabled: !!latestOpen?.id,
   });
 
-  // ── Hitung auto-pengeluaran dari antrian ──
-  const autoPengeluaran = useMemo<AutoPengeluaran[]>(() => {
+  // ── Auto pengeluaran ──
+  const autoPeng = useMemo<AutoPeng[]>(() => {
     if (!antrian) return [];
-    const result: AutoPengeluaran[] = [];
-
-    let totalFree = 0;
-    let countBig = 0;
-    let countPrem = 0;
-
+    let totalFree = 0, countBig = 0, countPrem = 0;
     for (const a of antrian) {
-      const isFree    = Number(a.isFree || a.is_free || 0) > 0;
-      const katMobil  = a.kategoriMobil || a.kategori_mobil || 'umum';
-      const upahWasher= UPAH_WASHER_BY_KAT[katMobil] || 11000;
-
-      if (isFree) {
-        totalFree += upahWasher;
-      }
-
-      // Big: semua mobil kategori big (kecuali free)
-      if (!isFree && katMobil === 'big') countBig++;
-
-      // Premium: mobil yang pakai layanan cuci premium
-      const kategoriLayanan = a.kategori || '';
-      if (!isFree && kategoriLayanan === 'Premium') countPrem++;
+      const isFree   = Number(a.isFree || a.is_free || 0) > 0;
+      const kat      = a.kategoriMobil || a.kategori_mobil || 'umum';
+      const upah     = UPAH_BY_KAT[kat] || 11000;
+      if (isFree)                                           totalFree += upah;
+      if (!isFree && kat === 'big')                         countBig++;
+      if (!isFree && (a.kategori || '') === 'Premium')      countPrem++;
     }
-
-    if (totalFree > 0) {
-      result.push({ jenis: 'free/p.free', harga: totalFree, keterangan: `Cuci free (upah washer)` });
-    }
-    if (countBig > 0) {
-      result.push({ jenis: 'big/p.big', harga: countBig * 2000, keterangan: `${countBig} mobil big × Rp 2.000` });
-    }
-    if (countPrem > 0) {
-      result.push({ jenis: 'prem/p.prem', harga: countPrem * 4000, keterangan: `${countPrem} mobil premium × Rp 4.000` });
-    }
-
+    const result: AutoPeng[] = [];
+    if (totalFree > 0) result.push({ jenis: 'free/p.free', harga: totalFree,       ket: `Cuci free (upah washer)` });
+    if (countBig > 0)  result.push({ jenis: 'big/p.big',   harga: countBig * 2000, ket: `${countBig} mobil big × Rp 2.000` });
+    if (countPrem > 0) result.push({ jenis: 'prem/p.prem', harga: countPrem * 4000, ket: `${countPrem} mobil premium × Rp 4.000` });
     return result;
   }, [antrian]);
 
-  // ── Hitung rekap dari closing items ──
-  const { totalHargaCuci, totalKasItems, totalPendapatanWasher, totalPendapatanTP, tpRekapMap } =
-    useMemo(() => {
-      let totalHargaCuci = 0;
-      let totalKasItems = 0;
-      let totalPendapatanWasher = 0;
-      let totalPendapatanTP = 0;
-      const tpRekapMap: Record<string, number> = {};
-
-      if (items) {
-        (items as any[]).forEach((item: any) => {
-          const jumlah = item.jumlah || 0;
-          const kas    = item.kas || 0;
-          const pw     = item.pendapatanWasher || item.pendapatan_washer || 0;
-          const pt     = item.pendapatanTP || item.pendapatan_tp || 0;
-          const namaTP = item.namaTP || item.nama_tp || '';
-
-          totalHargaCuci          += jumlah;
-          totalKasItems           += kas;
-          totalPendapatanWasher   += pw;
-          totalPendapatanTP       += pt;
-
-          if (namaTP && pt > 0) {
-            tpRekapMap[namaTP] = (tpRekapMap[namaTP] || 0) + pt;
-          }
-        });
-      }
-      return { totalHargaCuci, totalKasItems, totalPendapatanWasher, totalPendapatanTP, tpRekapMap };
-    }, [items]);
+  // ── Rekap closing items ──
+  const { totalHarga, totalKas, totalPendWasher, totalPendTP, tpMap } = useMemo(() => {
+    let totalHarga = 0, totalKas = 0, totalPendWasher = 0, totalPendTP = 0;
+    const tpMap: Record<string, number> = {};
+    if (items) {
+      (items as any[]).forEach((it: any) => {
+        totalHarga     += it.jumlah || 0;
+        totalKas       += it.kas    || 0;
+        totalPendWasher+= it.pendapatanWasher || it.pendapatan_washer || 0;
+        totalPendTP    += it.pendapatanTP     || it.pendapatan_tp     || 0;
+        const nm = it.namaTP || it.nama_tp || '';
+        const pt = it.pendapatanTP || it.pendapatan_tp || 0;
+        if (nm && pt > 0) tpMap[nm] = (tpMap[nm] || 0) + pt;
+      });
+    }
+    return { totalHarga, totalKas, totalPendWasher, totalPendTP, tpMap };
+  }, [items]);
 
   // ── Payment state ──
-  const [qrisBca,   setQrisBca]   = useState('');
-  const [bca,       setBca]       = useState(''); // BCA Transfer
-  const [bsi,       setBsi]       = useState('');
-  const [cimbBni,   setCimbBni]   = useState('');
-  const [mandiri,   setMandiri]   = useState('');
-  const [voucher,   setVoucher]   = useState('');
-  const [jualMart,  setJualMart]  = useState(''); // pengurang cashless
-  const [jualAcc,   setJualAcc]   = useState(''); // pengurang cashless
-
-  // ── Pengeluaran manual tambahan ──
+  const [qrisBca,  setQrisBca]  = useState('');
+  const [bca,      setBca]      = useState('');
+  const [bsi,      setBsi]      = useState('');
+  const [cimbBni,  setCimbBni]  = useState('');
+  const [mandiri,  setMandiri]  = useState('');
+  const [voucher,  setVoucher]  = useState('');
+  const [jualMart, setJualMart] = useState('');
+  const [jualAcc,  setJualAcc]  = useState('');
   const [manualPeng, setManualPeng] = useState<PengItem[]>([
     { jenis: '', harga: '' }, { jenis: '', harga: '' }, { jenis: '', harga: '' },
   ]);
 
-  const parseNum = (s: string) => parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
+  const parseN = (s: string) => parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
 
-  // Total cashless = semua pembayaran non-tunai - jual mart - jual acc
-  const totalCashlessGross = parseNum(qrisBca) + parseNum(bca) + parseNum(bsi) +
-    parseNum(cimbBni) + parseNum(mandiri) + parseNum(voucher);
-  const totalCashless = Math.max(0, totalCashlessGross - parseNum(jualMart) - parseNum(jualAcc));
+  const totalCashlessGross = parseN(qrisBca) + parseN(bca) + parseN(bsi) +
+    parseN(cimbBni) + parseN(mandiri) + parseN(voucher);
+  const totalCashless = Math.max(0, totalCashlessGross - parseN(jualMart) - parseN(jualAcc));
 
-  // Total pengeluaran = auto + manual + sudah tersimpan
-  const totalAutoOut  = autoPengeluaran.reduce((s, p) => s + p.harga, 0);
-  const totalManualOut= manualPeng.reduce((s, p) => s + parseNum(p.harga), 0);
-  const totalSavedOut = (savedPeng as any[])?.reduce((s: number, p: any) => s + (p.harga || 0), 0) || 0;
-  const totalOut      = totalAutoOut + totalManualOut + totalSavedOut;
+  const totalAutoOut   = autoPeng.reduce((s, p) => s + p.harga, 0);
+  const totalManualOut = manualPeng.reduce((s, p) => s + parseN(p.harga), 0);
+  const totalSavedOut  = (savedPeng as any[])?.reduce((s: number, p: any) => s + (p.harga || 0), 0) || 0;
+  const totalOut       = totalAutoOut + totalManualOut + totalSavedOut;
 
-  const omset = latestOpen?.totalOmset || 0;
-
-  // Omset Bersih = Total KAS - Total Pengeluaran
+  const omset      = latestOpen?.totalOmset || 0;
   const omsetBersih = omset - totalOut;
-
-  // Tunai Rill = Omset Bersih - Total Cashless
-  const tunaiRill = omsetBersih - totalCashless;
-
-  // Verifikasi: Total Harga - Total KAS = Pendapatan (Washer + TP)
-  const totalPendapatan = totalHargaCuci - totalKasItems;
+  const tunaiRill  = omsetBersih - totalCashless;
+  const totalPend  = totalHarga - totalKas;
 
   const closeMutation = useMutation({
     mutationFn: async () => {
       if (!latestOpen?.id) throw new Error('Tidak ada closing aktif');
-
-      // Simpan auto-pengeluaran
-      for (const p of autoPengeluaran) {
+      for (const p of autoPeng) {
         await blink.db.pengeluaran.create({
-          id: `peng_auto_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          id:        `peng_auto_${Date.now()}_${Math.random().toString(36).slice(2)}`,
           closingId: latestOpen.id,
-          jenis: p.jenis,
-          harga: p.harga,
+          jenis:     p.jenis,
+          harga:     p.harga,
         });
       }
-
-      // Simpan pengeluaran manual
       for (const p of manualPeng) {
-        if (p.jenis.trim() && parseNum(p.harga) > 0) {
+        if (p.jenis.trim() && parseN(p.harga) > 0) {
           await blink.db.pengeluaran.create({
-            id: `peng_manual_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            id:        `peng_m_${Date.now()}_${Math.random().toString(36).slice(2)}`,
             closingId: latestOpen.id,
-            jenis: p.jenis,
-            harga: parseNum(p.harga),
+            jenis:     p.jenis,
+            harga:     parseN(p.harga),
           });
         }
       }
-
       await blink.db.closingReports.update(latestOpen.id, {
         status:       'closed',
-        kasBca:       parseNum(bca),
-        kasBsi:       parseNum(bsi),
-        kasCimbBni:   parseNum(cimbBni),
-        kasQrisBca:   parseNum(qrisBca),
-        kasMandiri:   parseNum(mandiri),
-        kasVoucher:   parseNum(voucher),
+        kasBca:       parseN(bca),
+        kasBsi:       parseN(bsi),
+        kasCimbBni:   parseN(cimbBni),
+        kasQrisBca:   parseN(qrisBca),
+        kasMandiri:   parseN(mandiri),
+        kasVoucher:   parseN(voucher),
         kasTunai:     tunaiRill,
         totalCashless,
         totalOut,
@@ -245,8 +197,8 @@ export default function ClosingScreen() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['closing_reports'] });
-      queryClient.invalidateQueries({ queryKey: ['pengeluaran', latestOpen?.id] });
+      qc.invalidateQueries({ queryKey: ['closing_reports'] });
+      qc.invalidateQueries({ queryKey: ['pengeluaran', latestOpen?.id] });
       Alert.alert('Closing Berhasil ✅',
         `Omset: Rp ${fmt(omset)}\nOmset Bersih: Rp ${fmt(omsetBersih)}\nCashless: Rp ${fmt(totalCashless)}\nTunai Rill: Rp ${fmt(Math.max(0, tunaiRill))}`,
         [{
@@ -254,94 +206,115 @@ export default function ClosingScreen() {
             setBca(''); setBsi(''); setCimbBni(''); setQrisBca('');
             setMandiri(''); setVoucher(''); setJualMart(''); setJualAcc('');
             setManualPeng([{ jenis: '', harga: '' }, { jenis: '', harga: '' }, { jenis: '', harga: '' }]);
-          }
+          },
         }],
       );
     },
     onError: (e: any) => Alert.alert('Error', e.message),
   });
 
+  // ── EMPTY STATE ──
   if (!latestOpen) {
     return (
-      <SafeAreaView style={st.safeArea} edges={['top']}>
+      <SafeAreaView style={st.safe} edges={['top']}>
         <View style={st.header}>
-          <Text style={st.headerTitle}>CLOSING HARIAN</Text>
-          <Text style={st.headerSub}>Orange Carwash - Semarang 3</Text>
+          <View>
+            <Text style={st.headerTitle}>CLOSING HARIAN</Text>
+            <Text style={st.headerSub}>Rekap & tutup shift</Text>
+          </View>
+          <View style={st.headerIcon}>
+            <Ionicons name="document-text-outline" size={20} color={C.white} />
+          </View>
         </View>
         <View style={st.emptyBox}>
-          <Ionicons name="document-outline" size={60} color="#D1D5DB" />
+          <View style={st.emptyIconBox}>
+            <Ionicons name="document-outline" size={48} color={C.grayL} />
+          </View>
           <Text style={st.emptyTitle}>Belum Ada Closing Aktif</Text>
-          <Text style={st.emptyDesc}>Input data layanan di tab Kasir terlebih dahulu</Text>
+          <Text style={st.emptyDesc}>Input data layanan di tab Kasir terlebih dahulu untuk memulai shift</Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={st.safeArea} edges={['top']}>
+    <SafeAreaView style={st.safe} edges={['top']}>
+      {/* ── Header ── */}
       <View style={st.header}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={st.headerTitle}>CLOSING HARIAN</Text>
-          <Text style={st.headerSub}>{formatDateLong(latestOpen.tanggal)}</Text>
+          <Text style={st.headerSub}>{fmtDateLong(latestOpen.tanggal)}</Text>
         </View>
-        <View style={st.statusBadge}><Text style={st.statusTxt}>AKTIF</Text></View>
+        <View style={st.activeBadge}>
+          <View style={st.activeDot} />
+          <Text style={st.activeTxt}>AKTIF</Text>
+        </View>
       </View>
 
-      <ScrollView style={st.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
 
         {/* ── Info Dasar ── */}
         <View style={st.card}>
-          <IRow label="Kasir"              value={latestOpen.kasir} />
-          <IRow label="Jumlah Kendaraan"   value={`${latestOpen.jumlahMobil}`} />
-          <IRow label="Total Omset"        value={`Rp ${fmt(omset)}`} vc="#E85D04" large />
+          <View style={st.cardTitleRow}>
+            <Ionicons name="person-circle-outline" size={16} color={C.orange} />
+            <Text style={st.cardTitle}>INFO SHIFT</Text>
+          </View>
+          <View style={st.infoGrid}>
+            <InfoBox icon="person-outline" label="Kasir" val={latestOpen.kasir} />
+            <InfoBox icon="car-outline"    label="Kendaraan" val={`${latestOpen.jumlahMobil}`} />
+            <InfoBox icon="cash-outline"   label="Total Omset" val={`Rp ${fmt(omset)}`} vc={C.orange} />
+          </View>
         </View>
 
         {/* ── Rekap Pendapatan ── */}
         <View style={st.card}>
-          <Text style={st.cardTitle}>REKAP PENDAPATAN</Text>
-          <Text style={st.cardDesc}>
-            Total Harga Cuci − Total KAS = Pendapatan (Washer + TP)
-          </Text>
+          <View style={st.cardTitleRow}>
+            <Ionicons name="people-outline" size={16} color={C.purple} />
+            <Text style={st.cardTitle}>PENDAPATAN KARYAWAN</Text>
+          </View>
+          <Text style={st.cardDesc}>Total Harga − Total KAS = Upah Washer + TP</Text>
 
+          {/* Formula */}
           <View style={st.formulaRow}>
-            <View style={st.formulaBox}>
-              <Text style={st.formulaLbl}>Total Harga</Text>
-              <Text style={st.formulaVal}>Rp {fmt(totalHargaCuci)}</Text>
+            <View style={[st.formulaBox, { backgroundColor: C.grayBg }]}>
+              <Text style={st.fLbl}>Total Harga</Text>
+              <Text style={st.fVal}>Rp {fmt(totalHarga)}</Text>
             </View>
-            <Text style={st.formulaOp}>−</Text>
-            <View style={st.formulaBox}>
-              <Text style={st.formulaLbl}>Total KAS</Text>
-              <Text style={st.formulaVal}>Rp {fmt(totalKasItems)}</Text>
+            <Text style={st.fOp}>−</Text>
+            <View style={[st.formulaBox, { backgroundColor: C.grayBg }]}>
+              <Text style={st.fLbl}>Total KAS</Text>
+              <Text style={st.fVal}>Rp {fmt(totalKas)}</Text>
             </View>
-            <Text style={st.formulaOp}>=</Text>
-            <View style={[st.formulaBox, { backgroundColor: '#ECFDF5' }]}>
-              <Text style={[st.formulaLbl, { color: '#065F46' }]}>Pendapatan</Text>
-              <Text style={[st.formulaVal, { color: '#059669' }]}>Rp {fmt(totalPendapatan)}</Text>
-            </View>
-          </View>
-
-          <View style={st.pendapatanRow}>
-            <View style={[st.pendapatanBox, { backgroundColor: '#ECFDF5' }]}>
-              <Ionicons name="water" size={14} color="#059669" />
-              <Text style={st.pendapatanLbl}>Washer</Text>
-              <Text style={[st.pendapatanVal, { color: '#059669' }]}>Rp {fmt(totalPendapatanWasher)}</Text>
-            </View>
-            <View style={[st.pendapatanBox, { backgroundColor: '#F5F3FF' }]}>
-              <Ionicons name="star" size={14} color="#7C3AED" />
-              <Text style={st.pendapatanLbl}>TP</Text>
-              <Text style={[st.pendapatanVal, { color: '#7C3AED' }]}>Rp {fmt(totalPendapatanTP)}</Text>
+            <Text style={st.fOp}>=</Text>
+            <View style={[st.formulaBox, { backgroundColor: C.greenBg }]}>
+              <Text style={[st.fLbl, { color: '#065F46' }]}>Pendapatan</Text>
+              <Text style={[st.fVal, { color: C.green }]}>Rp {fmt(totalPend)}</Text>
             </View>
           </View>
 
-          {/* Breakdown per TP */}
-          {Object.keys(tpRekapMap).length > 0 && (
+          {/* Washer + TP boxes */}
+          <View style={st.pendRow}>
+            <View style={[st.pendBox, { backgroundColor: C.greenBg }]}>
+              <Ionicons name="water-outline" size={18} color={C.green} />
+              <Text style={[st.pendLbl, { color: '#065F46' }]}>Washer</Text>
+              <Text style={[st.pendVal, { color: C.green }]}>Rp {fmt(totalPendWasher)}</Text>
+            </View>
+            <View style={[st.pendBox, { backgroundColor: C.purpleBg }]}>
+              <Ionicons name="star-outline" size={18} color={C.purple} />
+              <Text style={[st.pendLbl, { color: '#4C1D95' }]}>TP</Text>
+              <Text style={[st.pendVal, { color: C.purple }]}>Rp {fmt(totalPendTP)}</Text>
+            </View>
+          </View>
+
+          {/* TP breakdown */}
+          {Object.keys(tpMap).length > 0 && (
             <View style={st.tpBreakdown}>
-              <Text style={st.tpBreakdownTitle}>Rincian per TP:</Text>
-              {Object.entries(tpRekapMap).map(([nama, total]) => (
-                <View key={nama} style={st.tpRow}>
-                  <Ionicons name="person" size={13} color="#7C3AED" />
-                  <Text style={st.tpName}>{nama}</Text>
-                  <Text style={st.tpTotal}>Rp {fmt(total)}</Text>
+              <Text style={st.tpBdTitle}>Rincian per Team Polisher:</Text>
+              {Object.entries(tpMap).map(([nama, total]) => (
+                <View key={nama} style={st.tpBdRow}>
+                  <Ionicons name="person-outline" size={13} color={C.purple} />
+                  <Text style={st.tpBdName}>{nama}</Text>
+                  <Text style={st.tpBdVal}>Rp {fmt(total)}</Text>
                 </View>
               ))}
             </View>
@@ -351,31 +324,33 @@ export default function ClosingScreen() {
         {/* ── Detail Layanan ── */}
         {items && (items as any[]).length > 0 && (
           <View style={st.card}>
-            <Text style={st.cardTitle}>DETAIL LAYANAN</Text>
+            <View style={st.cardTitleRow}>
+              <Ionicons name="list-outline" size={16} color={C.slate} />
+              <Text style={st.cardTitle}>DETAIL LAYANAN</Text>
+            </View>
             <View style={st.tableHead}>
               <Text style={[st.th, { flex: 2.5 }]}>LAYANAN</Text>
-              <Text style={[st.th, { width: 26, textAlign: 'center' }]}>QTY</Text>
+              <Text style={[st.th, { width: 28, textAlign: 'center' }]}>QTY</Text>
               <Text style={[st.th, { width: 50, textAlign: 'center' }]}>KAS</Text>
-              <Text style={[st.th, { width: 52, textAlign: 'center', color: '#7C3AED' }]}>TP</Text>
+              <Text style={[st.th, { width: 55, textAlign: 'center', color: '#A78BFA' }]}>TP</Text>
               <Text style={[st.th, { width: 60, textAlign: 'right' }]}>JUMLAH</Text>
             </View>
-            {(items as any[]).map((item: any, i: number) => {
-              const namaTP = item.namaTP || item.nama_tp || '';
-              const pt = item.pendapatanTP || item.pendapatan_tp || 0;
-              const kas = item.kas || 0;
+            {(items as any[]).map((it: any, i: number) => {
+              const namaTP = it.namaTP || it.nama_tp || '';
+              const pt     = it.pendapatanTP || it.pendapatan_tp || 0;
               return (
                 <View key={i} style={st.tableRow}>
                   <View style={{ flex: 2.5 }}>
-                    <Text style={st.tdName} numberOfLines={2}>{item.serviceName || item.service_name}</Text>
+                    <Text style={st.tdName} numberOfLines={2}>{it.serviceName || it.service_name}</Text>
                     {namaTP ? <Text style={st.tdTP}>TP: {namaTP} +{fmt(pt)}</Text> : null}
                   </View>
-                  <Text style={[st.td, { width: 26, textAlign: 'center' }]}>{item.qty}</Text>
-                  <Text style={[st.td, { width: 50, textAlign: 'center', color: '#6B7280' }]}>{fmt(kas)}</Text>
-                  <Text style={[st.td, { width: 52, textAlign: 'center', color: '#7C3AED', fontWeight: '700' }]}>
-                    {pt > 0 ? fmt(pt) : '-'}
+                  <Text style={[st.td, { width: 28, textAlign: 'center' }]}>{it.qty}</Text>
+                  <Text style={[st.td, { width: 50, textAlign: 'center', color: C.gray }]}>{fmt(it.kas || 0)}</Text>
+                  <Text style={[st.td, { width: 55, textAlign: 'center', color: C.purple, fontWeight: '700' }]}>
+                    {pt > 0 ? fmt(pt) : '−'}
                   </Text>
-                  <Text style={[st.td, { width: 60, textAlign: 'right', color: '#059669', fontWeight: '700' }]}>
-                    {fmt(item.jumlah)}
+                  <Text style={[st.td, { width: 60, textAlign: 'right', color: C.green, fontWeight: '800' }]}>
+                    {fmt(it.jumlah)}
                   </Text>
                 </View>
               );
@@ -383,46 +358,52 @@ export default function ClosingScreen() {
           </View>
         )}
 
-        {/* ── Pengeluaran Otomatis ── */}
+        {/* ── Pengeluaran ── */}
         <View style={st.card}>
-          <Text style={st.cardTitle}>PENGELUARAN OTOMATIS</Text>
-          <Text style={st.cardDesc}>Dihitung otomatis dari data antrian hari ini</Text>
+          <View style={st.cardTitleRow}>
+            <Ionicons name="arrow-down-circle-outline" size={16} color={C.red} />
+            <Text style={st.cardTitle}>PENGELUARAN</Text>
+          </View>
 
-          {autoPengeluaran.length === 0 ? (
+          {/* Auto */}
+          <Text style={st.subTitle}>OTOMATIS (dari antrian)</Text>
+          {autoPeng.length === 0 ? (
             <View style={st.autoPengEmpty}>
-              <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+              <Ionicons name="checkmark-circle" size={18} color={C.green} />
               <Text style={st.autoPengEmptyTxt}>Tidak ada pengeluaran otomatis</Text>
             </View>
           ) : (
-            autoPengeluaran.map((p, i) => (
+            autoPeng.map((p, i) => (
               <View key={i} style={st.autoPengRow}>
-                <View style={st.autoPengIcon}>
+                <View style={[st.autoPengIcon, {
+                  backgroundColor: p.jenis.includes('free') ? C.redBg : p.jenis.includes('big') ? '#FFFBEB' : C.purpleBg,
+                }]}>
                   <Ionicons
-                    name={p.jenis.includes('free') ? 'gift' : p.jenis.includes('big') ? 'car-sport' : 'star'}
+                    name={p.jenis.includes('free') ? 'gift-outline' : p.jenis.includes('big') ? 'car-sport-outline' : 'star-outline'}
                     size={14}
-                    color={p.jenis.includes('free') ? '#DC2626' : p.jenis.includes('big') ? '#D97706' : '#7C3AED'}
+                    color={p.jenis.includes('free') ? C.red : p.jenis.includes('big') ? C.yellow : C.purple}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={st.autoPengJenis}>{p.jenis}</Text>
-                  <Text style={st.autoPengKet}>{p.keterangan}</Text>
+                  <Text style={st.autoPengKet}>{p.ket}</Text>
                 </View>
-                <Text style={st.autoPengHarga}>- Rp {fmt(p.harga)}</Text>
+                <Text style={st.autoPengHarga}>− Rp {fmt(p.harga)}</Text>
               </View>
             ))
           )}
 
-          {/* Pengeluaran manual tambahan */}
-          <Text style={[st.cardTitle, { marginTop: 14 }]}>PENGELUARAN MANUAL</Text>
+          {/* Manual */}
+          <Text style={[st.subTitle, { marginTop: 14 }]}>MANUAL TAMBAHAN</Text>
           {manualPeng.map((p, i) => (
             <View key={i} style={st.pengRow}>
-              <Text style={st.pengNo}>{i + 1}</Text>
+              <Text style={st.pengNo}>{i + 1}.</Text>
               <TextInput
                 style={[st.pengInput, { flex: 2 }]}
                 placeholder="Jenis pengeluaran..."
                 value={p.jenis}
                 onChangeText={v => { const a = [...manualPeng]; a[i].jenis = v; setManualPeng(a); }}
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor={C.gray}
               />
               <TextInput
                 style={[st.pengInput, { flex: 1 }]}
@@ -430,7 +411,7 @@ export default function ClosingScreen() {
                 value={p.harga}
                 onChangeText={v => { const a = [...manualPeng]; a[i].harga = v; setManualPeng(a); }}
                 keyboardType="numeric"
-                placeholderTextColor="#9CA3AF"
+                placeholderTextColor={C.gray}
               />
             </View>
           ))}
@@ -438,93 +419,85 @@ export default function ClosingScreen() {
             style={st.addPengBtn}
             onPress={() => setManualPeng(prev => [...prev, { jenis: '', harga: '' }])}
           >
-            <Ionicons name="add-circle-outline" size={16} color="#E85D04" />
-            <Text style={st.addPengBtnTxt}>Tambah baris</Text>
+            <Ionicons name="add-circle-outline" size={16} color={C.orange} />
+            <Text style={st.addPengTxt}>Tambah baris</Text>
           </TouchableOpacity>
 
+          {/* Total Out */}
           <View style={st.totalOutRow}>
             <View>
-              <Text style={st.totalOutLabel}>TOTAL PENGELUARAN</Text>
+              <Text style={st.totalOutLbl}>TOTAL PENGELUARAN</Text>
               <Text style={st.totalOutSub}>Auto: {fmt(totalAutoOut)} + Manual: {fmt(totalManualOut)}</Text>
             </View>
-            <Text style={st.totalOutValue}>Rp {fmt(totalOut)}</Text>
+            <Text style={st.totalOutVal}>Rp {fmt(totalOut)}</Text>
           </View>
         </View>
 
-        {/* ── Pembayaran Cashless ── */}
+        {/* ── Cashless ── */}
         <View style={st.card}>
-          <Text style={st.cardTitle}>PEMBAYARAN CASHLESS</Text>
-          <Text style={st.cardDesc}>
-            Total Cashless = (QRIS + Transfer) − Jual Mart − Jual ACC
-          </Text>
+          <View style={st.cardTitleRow}>
+            <Ionicons name="card-outline" size={16} color={C.slate} />
+            <Text style={st.cardTitle}>PEMBAYARAN CASHLESS</Text>
+          </View>
+          <Text style={st.cardDesc}>Total Cashless = (QRIS + Transfer) − Jual Mart − Jual ACC</Text>
 
           <View style={st.payGrid}>
-            <PayField label="QRIS BCA" value={qrisBca} setter={setQrisBca} />
-            <PayField label="BCA Transfer" value={bca} setter={setBca} />
-            <PayField label="BSI" value={bsi} setter={setBsi} />
-            <PayField label="CIMB / BNI" value={cimbBni} setter={setCimbBni} />
-            <PayField label="Mandiri" value={mandiri} setter={setMandiri} />
-            <PayField label="Voucher" value={voucher} setter={setVoucher} />
+            <PayF label="QRIS BCA"    val={qrisBca}  set={setQrisBca}  />
+            <PayF label="BCA Transfer" val={bca}     set={setBca}      />
+            <PayF label="BSI"          val={bsi}     set={setBsi}      />
+            <PayF label="CIMB / BNI"   val={cimbBni} set={setCimbBni}  />
+            <PayF label="Mandiri"      val={mandiri} set={setMandiri}  />
+            <PayF label="Voucher"      val={voucher} set={setVoucher}  />
           </View>
 
-          {/* Pengurang cashless */}
-          <View style={[st.payGrid, { marginTop: 8 }]}>
+          {/* Pengurang */}
+          <View style={[st.payGrid, { marginTop: 6 }]}>
             <View style={st.payField}>
-              <Text style={[st.payLabel, { color: '#DC2626' }]}>− Jual Mart</Text>
-              <TextInput
-                style={[st.payInput, { borderColor: '#FECACA' }]}
+              <Text style={[st.payLbl, { color: C.red }]}>− Jual Mart</Text>
+              <TextInput style={[st.payInput, { borderColor: '#FECACA' }]}
                 value={jualMart} onChangeText={setJualMart}
-                keyboardType="numeric" placeholder="0" placeholderTextColor="#9CA3AF"
-              />
+                keyboardType="numeric" placeholder="0" placeholderTextColor={C.gray} />
             </View>
             <View style={st.payField}>
-              <Text style={[st.payLabel, { color: '#DC2626' }]}>− Jual ACC</Text>
-              <TextInput
-                style={[st.payInput, { borderColor: '#FECACA' }]}
+              <Text style={[st.payLbl, { color: C.red }]}>− Jual ACC</Text>
+              <TextInput style={[st.payInput, { borderColor: '#FECACA' }]}
                 value={jualAcc} onChangeText={setJualAcc}
-                keyboardType="numeric" placeholder="0" placeholderTextColor="#9CA3AF"
-              />
+                keyboardType="numeric" placeholder="0" placeholderTextColor={C.gray} />
             </View>
           </View>
 
           <View style={st.cashlessTotalRow}>
-            <Text style={st.cashlessTotalLabel}>Total Cashless</Text>
+            <Text style={st.cashlessTotalLbl}>Total Cashless</Text>
             <Text style={st.cashlessTotalVal}>Rp {fmt(totalCashless)}</Text>
           </View>
         </View>
 
         {/* ── Rekap Akhir ── */}
-        <View style={st.rekapBox}>
-          <Text style={st.rekapTitle}>REKAP AKHIR</Text>
+        <View style={st.rekapCard}>
+          <View style={st.rekapTitleRow}>
+            <Ionicons name="calculator-outline" size={18} color={C.white} />
+            <Text style={st.rekapTitle}>REKAP AKHIR</Text>
+          </View>
 
-          <RRow label="Total Omset"      value={`Rp ${fmt(omset)}`} />
-          <RRow label="Total Pengeluaran" value={`- Rp ${fmt(totalOut)}`} vc="#EF4444" />
+          <RR label="Total Omset"       val={`Rp ${fmt(omset)}`}       />
+          <RR label="Total Pengeluaran" val={`− Rp ${fmt(totalOut)}`}  vc="#FCA5A5" />
           <View style={st.rekapDiv} />
-          <RRow
-            label="Omset Bersih"
-            value={`Rp ${fmt(omsetBersih)}`}
-            vc={omsetBersih >= 0 ? '#F59E0B' : '#EF4444'}
-            bold
-          />
+          <RR label="Omset Bersih"      val={`Rp ${fmt(omsetBersih)}`} vc="#FCD34D" bold />
           <View style={st.rekapDiv} />
-          <RRow label="Total Cashless"    value={`- Rp ${fmt(totalCashless)}`} vc="#6B7280" />
+          <RR label="Total Cashless"    val={`− Rp ${fmt(totalCashless)}`} vc="#94A3B8" />
 
-          {/* Pendapatan Washer+TP untuk pembayaran ke karyawan */}
-          <View style={[st.rekapDiv, { marginVertical: 8 }]} />
+          <View style={st.rekapSep} />
           <Text style={st.rekapSubTitle}>UNTUK PEMBAYARAN KARYAWAN</Text>
-          <RRow label="💧 Upah Washer"  value={`Rp ${fmt(totalPendapatanWasher)}`} vc="#059669" />
-          <RRow label="⭐ Upah TP"      value={`Rp ${fmt(totalPendapatanTP)}`}     vc="#7C3AED" />
-          <View style={st.rekapDiv} />
+          <RR label="💧 Upah Washer"    val={`Rp ${fmt(totalPendWasher)}`}  vc="#34D399" />
+          <RR label="⭐ Upah TP"        val={`Rp ${fmt(totalPendTP)}`}      vc="#A78BFA" />
 
-          {/* Tunai Rill */}
-          <View style={[st.rekapHighlight, { marginTop: 6 }]}>
+          <View style={[st.rekapHighlight, tunaiRill < 0 && { backgroundColor: C.red }]}>
             <View>
-              <Text style={st.rekapHLLabel}>TUNAI RILL (LOKER)</Text>
-              <Text style={st.rekapHLSub}>Omset Bersih − Cashless</Text>
+              <Text style={st.hlLabel}>TUNAI RILL (LOKER)</Text>
+              <Text style={st.hlSub}>Omset Bersih − Cashless</Text>
             </View>
-            <Text style={[st.rekapHLVal, tunaiRill < 0 && { color: '#FCA5A5' }]}>
-              Rp {fmt(Math.abs(tunaiRill))}
-              {tunaiRill < 0 ? ' ⚠' : ''}
+            <Text style={[st.hlVal, tunaiRill < 0 && { color: '#FCA5A5' }]}>
+              Rp {fmt(Math.abs(tunaiRill))}{tunaiRill < 0 ? ' ⚠' : ''}
             </Text>
           </View>
         </View>
@@ -532,6 +505,7 @@ export default function ClosingScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* ── Footer Button ── */}
       <View style={st.footer}>
         <TouchableOpacity
           style={[st.closeBtn, closeMutation.isPending && st.closeBtnDis]}
@@ -542,8 +516,9 @@ export default function ClosingScreen() {
             ]);
           }}
           disabled={closeMutation.isPending}
+          activeOpacity={0.8}
         >
-          <Ionicons name="checkmark-circle" size={22} color="#fff" />
+          <Ionicons name="checkmark-circle" size={22} color={C.white} />
           <Text style={st.closeBtnTxt}>
             {closeMutation.isPending ? 'Menyimpan...' : 'SELESAIKAN CLOSING'}
           </Text>
@@ -553,120 +528,131 @@ export default function ClosingScreen() {
   );
 }
 
-function IRow({ label, value, vc, large }: { label: string; value: string; vc?: string; large?: boolean }) {
+// ─── Helper Components ────────────────────────────────────────────────────────
+function InfoBox({ icon, label, val, vc }: { icon: string; label: string; val: string; vc?: string }) {
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-      <Text style={{ fontSize: 13, color: '#6B7280' }}>{label}</Text>
-      <Text style={{ fontSize: large ? 16 : 13, fontWeight: large ? '900' : '600', color: vc || '#1F2937' }}>{value}</Text>
+    <View style={st.infoBox}>
+      <Ionicons name={icon as any} size={14} color={vc || C.gray} />
+      <Text style={st.infoLbl}>{label}</Text>
+      <Text style={[st.infoVal, vc && { color: vc }]}>{val}</Text>
     </View>
   );
 }
 
-function RRow({ label, value, vc, bold }: { label: string; value: string; vc?: string; bold?: boolean }) {
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 }}>
-      <Text style={{ fontSize: bold ? 13 : 12, color: bold ? '#F3F4F6' : '#9CA3AF', fontWeight: bold ? '700' : '400' }}>{label}</Text>
-      <Text style={{ fontSize: bold ? 15 : 13, fontWeight: bold ? '900' : '600', color: vc || '#E5E7EB' }}>{value}</Text>
-    </View>
-  );
-}
-
-function PayField({ label, value, setter }: { label: string; value: string; setter: (v: string) => void }) {
+function PayF({ label, val, set }: { label: string; val: string; set: (v: string) => void }) {
   return (
     <View style={st.payField}>
-      <Text style={st.payLabel}>{label}</Text>
+      <Text style={st.payLbl}>{label}</Text>
       <TextInput
-        style={st.payInput} value={value} onChangeText={setter}
-        keyboardType="numeric" placeholder="0" placeholderTextColor="#9CA3AF"
+        style={st.payInput}
+        value={val}
+        onChangeText={set}
+        keyboardType="numeric"
+        placeholder="0"
+        placeholderTextColor={C.gray}
       />
     </View>
   );
 }
 
+function RR({ label, val, vc, bold }: { label: string; val: string; vc?: string; bold?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 }}>
+      <Text style={{ fontSize: bold ? 13 : 12, color: bold ? '#E2E8F0' : '#94A3B8', fontWeight: bold ? '700' : '400' }}>{label}</Text>
+      <Text style={{ fontSize: bold ? 15 : 13, fontWeight: bold ? '900' : '600', color: vc || '#E2E8F0' }}>{val}</Text>
+    </View>
+  );
+}
+
 const st = StyleSheet.create({
-  safeArea:    { flex: 1, backgroundColor: '#F9FAFB' },
-  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1F2937', paddingHorizontal: 16, paddingVertical: 14 },
-  headerTitle: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
-  headerSub:   { color: '#9CA3AF', fontSize: 11, marginTop: 1 },
-  statusBadge: { backgroundColor: '#10B981', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  statusTxt:   { color: '#fff', fontSize: 11, fontWeight: '700' },
-  scroll:      { flex: 1 },
-  emptyBox:    { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  emptyTitle:  { fontSize: 18, fontWeight: '700', color: '#374151', marginTop: 16 },
-  emptyDesc:   { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginTop: 8 },
-  card:        { margin: 10, marginBottom: 0, backgroundColor: '#fff', borderRadius: 12, padding: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 1 },
-  cardTitle:   { fontSize: 11, fontWeight: '800', color: '#1F2937', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.8 },
-  cardDesc:    { fontSize: 10, color: '#9CA3AF', marginBottom: 10 },
+  safe:         { flex: 1, backgroundColor: C.bg },
+  header:       { flexDirection: 'row', alignItems: 'center', backgroundColor: C.dark, paddingHorizontal: 18, paddingVertical: 16 },
+  headerTitle:  { color: C.white, fontSize: 18, fontWeight: '900', letterSpacing: 0.5 },
+  headerSub:    { color: '#94A3B8', fontSize: 11, marginTop: 1 },
+  headerIcon:   { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+  activeBadge:  { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#065F46', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14 },
+  activeDot:    { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34D399' },
+  activeTxt:    { fontSize: 11, fontWeight: '800', color: C.white },
 
-  // Formula row
-  formulaRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 10 },
-  formulaBox:  { flex: 1, backgroundColor: '#F9FAFB', borderRadius: 8, padding: 8, alignItems: 'center' },
-  formulaLbl:  { fontSize: 9, color: '#6B7280', textAlign: 'center' },
-  formulaVal:  { fontSize: 12, fontWeight: '800', color: '#1F2937', textAlign: 'center', marginTop: 2 },
-  formulaOp:   { fontSize: 16, fontWeight: '900', color: '#9CA3AF' },
+  emptyBox:     { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 },
+  emptyIconBox: { width: 88, height: 88, borderRadius: 44, backgroundColor: C.grayBg, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle:   { fontSize: 18, fontWeight: '700', color: C.slate },
+  emptyDesc:    { fontSize: 13, color: C.gray, textAlign: 'center', lineHeight: 20 },
 
-  // Pendapatan boxes
-  pendapatanRow:{ flexDirection: 'row', gap: 8, marginBottom: 10 },
-  pendapatanBox:{ flex: 1, borderRadius: 8, padding: 10, alignItems: 'center', gap: 3 },
-  pendapatanLbl:{ fontSize: 10, color: '#374151', fontWeight: '600' },
-  pendapatanVal:{ fontSize: 14, fontWeight: '900' },
+  card:         { margin: 10, marginBottom: 0, backgroundColor: C.white, borderRadius: 16, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  cardTitle:    { fontSize: 11, fontWeight: '800', color: C.slate, letterSpacing: 0.8, textTransform: 'uppercase', flex: 1 },
+  cardDesc:     { fontSize: 11, color: C.gray, marginTop: -6, marginBottom: 10 },
+  subTitle:     { fontSize: 10, fontWeight: '800', color: C.gray, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 6 },
 
-  // TP breakdown
-  tpBreakdown: { backgroundColor: '#F5F3FF', borderRadius: 8, padding: 10 },
-  tpBreakdownTitle: { fontSize: 11, fontWeight: '700', color: '#5B21B6', marginBottom: 6 },
-  tpRow:       { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
-  tpName:      { flex: 1, fontSize: 13, color: '#374151', fontWeight: '600' },
-  tpTotal:     { fontSize: 13, fontWeight: '800', color: '#7C3AED' },
+  infoGrid:     { flexDirection: 'row', gap: 8 },
+  infoBox:      { flex: 1, backgroundColor: C.grayBg, borderRadius: 10, padding: 10, alignItems: 'center', gap: 3 },
+  infoLbl:      { fontSize: 9, color: C.gray, fontWeight: '600', textAlign: 'center' },
+  infoVal:      { fontSize: 12, fontWeight: '800', color: C.dark, textAlign: 'center' },
 
-  // Detail layanan table
-  tableHead:   { flexDirection: 'row', backgroundColor: '#F8FAFC', borderRadius: 6, padding: 6, marginBottom: 2 },
-  th:          { fontSize: 9, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase' },
-  tableRow:    { flexDirection: 'row', alignItems: 'center', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#F9FAFB' },
-  tdName:      { fontSize: 11, color: '#374151', fontWeight: '500' },
-  tdTP:        { fontSize: 10, color: '#7C3AED', marginTop: 1 },
-  td:          { fontSize: 11, color: '#374151' },
+  formulaRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 12 },
+  formulaBox:   { flex: 1, borderRadius: 10, padding: 8, alignItems: 'center' },
+  fLbl:         { fontSize: 9, color: C.gray, textAlign: 'center' },
+  fVal:         { fontSize: 11, fontWeight: '800', color: C.dark, textAlign: 'center', marginTop: 2 },
+  fOp:          { fontSize: 16, fontWeight: '900', color: '#CBD5E1' },
 
-  // Auto pengeluaran
-  autoPengEmpty: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ECFDF5', borderRadius: 8, padding: 10 },
-  autoPengEmptyTxt: { fontSize: 12, color: '#065F46', fontWeight: '600' },
-  autoPengRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  autoPengIcon:{ width: 28, height: 28, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
-  autoPengJenis:{ fontSize: 12, fontWeight: '700', color: '#374151' },
-  autoPengKet: { fontSize: 10, color: '#9CA3AF', marginTop: 1 },
-  autoPengHarga:{ fontSize: 13, fontWeight: '800', color: '#EF4444' },
+  pendRow:      { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  pendBox:      { flex: 1, borderRadius: 12, padding: 12, alignItems: 'center', gap: 4 },
+  pendLbl:      { fontSize: 11, fontWeight: '600' },
+  pendVal:      { fontSize: 15, fontWeight: '900' },
 
-  // Manual pengeluaran
-  pengRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  pengNo:      { fontSize: 13, fontWeight: '700', color: '#9CA3AF', width: 18 },
-  pengInput:   { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, padding: 9, fontSize: 13, color: '#1F2937', backgroundColor: '#F9FAFB' },
-  addPengBtn:  { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 4 },
-  addPengBtnTxt:{ fontSize: 12, color: '#E85D04', fontWeight: '600' },
-  totalOutRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
-  totalOutLabel:{ fontSize: 13, fontWeight: '700', color: '#374151' },
-  totalOutSub: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
-  totalOutValue:{ fontSize: 16, fontWeight: '900', color: '#EF4444' },
+  tpBreakdown:  { backgroundColor: C.purpleBg, borderRadius: 10, padding: 10 },
+  tpBdTitle:    { fontSize: 11, fontWeight: '700', color: '#5B21B6', marginBottom: 6 },
+  tpBdRow:      { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 3 },
+  tpBdName:     { flex: 1, fontSize: 13, color: C.slate, fontWeight: '600' },
+  tpBdVal:      { fontSize: 13, fontWeight: '800', color: C.purple },
 
-  // Cashless
-  payGrid:     { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  payField:    { width: '47%' },
-  payLabel:    { fontSize: 12, fontWeight: '700', color: '#374151', marginBottom: 4 },
-  payInput:    { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, padding: 10, fontSize: 14, color: '#1F2937', backgroundColor: '#F9FAFB' },
-  cashlessTotalRow:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
-  cashlessTotalLabel:{ fontSize: 13, fontWeight: '700', color: '#374151' },
-  cashlessTotalVal:  { fontSize: 16, fontWeight: '900', color: '#059669' },
+  tableHead:    { flexDirection: 'row', backgroundColor: '#F1F5F9', borderRadius: 8, padding: 7, marginBottom: 4 },
+  th:           { fontSize: 9, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase' },
+  tableRow:     { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  tdName:       { fontSize: 11, color: C.slate, fontWeight: '500' },
+  tdTP:         { fontSize: 10, color: C.purple, marginTop: 1 },
+  td:           { fontSize: 11, color: C.slate },
 
-  // Rekap akhir
-  rekapBox:    { margin: 10, backgroundColor: '#1F2937', borderRadius: 12, padding: 16 },
-  rekapTitle:  { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: 1, marginBottom: 12 },
-  rekapSubTitle:{ color: '#9CA3AF', fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginBottom: 4, textTransform: 'uppercase' },
-  rekapDiv:    { height: 1, backgroundColor: '#374151', marginVertical: 6 },
-  rekapHighlight:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#E85D04', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, marginTop: 4 },
-  rekapHLLabel:{ fontSize: 14, fontWeight: '800', color: '#fff' },
-  rekapHLSub:  { fontSize: 10, color: '#FED7AA', marginTop: 2 },
-  rekapHLVal:  { fontSize: 20, fontWeight: '900', color: '#fff' },
+  autoPengEmpty:  { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.greenBg, borderRadius: 10, padding: 10 },
+  autoPengEmptyTxt:{ fontSize: 12, color: '#065F46', fontWeight: '600' },
+  autoPengRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: C.border },
+  autoPengIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  autoPengJenis:{ fontSize: 12, fontWeight: '700', color: C.slate },
+  autoPengKet:  { fontSize: 10, color: C.gray, marginTop: 1 },
+  autoPengHarga:{ fontSize: 13, fontWeight: '800', color: C.red },
 
-  footer:      { padding: 16, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#E5E7EB', paddingBottom: Platform.OS === 'ios' ? 24 : 16 },
-  closeBtn:    { flexDirection: 'row', gap: 8, backgroundColor: '#059669', borderRadius: 12, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
-  closeBtnDis: { backgroundColor: '#6EE7B7' },
-  closeBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
+  pengRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  pengNo:       { fontSize: 12, fontWeight: '700', color: C.gray, width: 20 },
+  pengInput:    { borderWidth: 1.5, borderColor: C.border, borderRadius: 8, padding: 9, fontSize: 13, color: C.dark, backgroundColor: C.grayBg },
+  addPengBtn:   { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
+  addPengTxt:   { fontSize: 12, color: C.orange, fontWeight: '600' },
+  totalOutRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1.5, borderTopColor: C.border },
+  totalOutLbl:  { fontSize: 13, fontWeight: '700', color: C.slate },
+  totalOutSub:  { fontSize: 10, color: C.gray, marginTop: 2 },
+  totalOutVal:  { fontSize: 16, fontWeight: '900', color: C.red },
+
+  payGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  payField:     { width: '47%' },
+  payLbl:       { fontSize: 11, fontWeight: '700', color: C.slate, marginBottom: 5 },
+  payInput:     { borderWidth: 1.5, borderColor: C.border, borderRadius: 8, padding: 9, fontSize: 14, color: C.dark, backgroundColor: C.grayBg },
+  cashlessTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 8, borderTopWidth: 1.5, borderTopColor: C.border },
+  cashlessTotalLbl: { fontSize: 13, fontWeight: '700', color: C.slate },
+  cashlessTotalVal: { fontSize: 16, fontWeight: '900', color: C.green },
+
+  rekapCard:    { margin: 10, marginBottom: 0, backgroundColor: C.dark, borderRadius: 16, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 4 },
+  rekapTitleRow:{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  rekapTitle:   { color: C.white, fontSize: 13, fontWeight: '900', letterSpacing: 1, flex: 1 },
+  rekapDiv:     { height: 1, backgroundColor: '#1E293B', marginVertical: 6 },
+  rekapSep:     { height: 1, backgroundColor: '#334155', marginVertical: 10 },
+  rekapSubTitle:{ color: '#64748B', fontSize: 9, fontWeight: '800', letterSpacing: 0.8, marginBottom: 4, textTransform: 'uppercase' },
+  rekapHighlight:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: C.orange, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginTop: 14 },
+  hlLabel:      { fontSize: 13, fontWeight: '800', color: C.white },
+  hlSub:        { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  hlVal:        { fontSize: 20, fontWeight: '900', color: C.white },
+
+  footer:       { padding: 14, backgroundColor: C.white, borderTopWidth: 1, borderTopColor: C.border, paddingBottom: Platform.OS === 'ios' ? 28 : 14 },
+  closeBtn:     { flexDirection: 'row', gap: 10, backgroundColor: C.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', justifyContent: 'center' },
+  closeBtnDis:  { backgroundColor: '#6EE7B7' },
+  closeBtnTxt:  { color: C.white, fontSize: 15, fontWeight: '900', letterSpacing: 0.5 },
 });

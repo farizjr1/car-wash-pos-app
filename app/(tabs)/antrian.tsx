@@ -8,14 +8,36 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { blink } from '@/lib/blink';
 import {
-  SERVICES, getPendapatanTP, getPendapatanTPTetap, getPendapatanTPPoles,
-  getPendapatanWasher, getUpahWasherTP, Service,
+  SERVICES, getPendapatanTPPoles, getPendapatanTPTetap,
+  getUpahWasherTP, Service,
 } from '@/constants/services';
-import {
-  ALL_CARS, KATEGORI_MOBIL_LABEL, KATEGORI_MOBIL_PRICE,
-  WASHER_UPAH, KategoriMobil, CarInfo,
-} from '@/constants/cars';
+import { KATEGORI_MOBIL_LABEL, KATEGORI_MOBIL_PRICE, WASHER_UPAH } from '@/constants/cars';
+import type { KategoriMobil } from '@/constants/cars';
 
+// ─── Colors ──────────────────────────────────────────────────────────────────
+const C = {
+  orange:     '#E85D04',
+  orangeD:    '#BF4800',
+  orangeL:    '#FFF3E0',
+  orangeT:    'rgba(232,93,4,0.15)',
+  bg:         '#F5F5F5',
+  white:      '#FFFFFF',
+  dark:       '#1A1A2E',
+  slate:      '#374151',
+  gray:       '#6B7280',
+  grayL:      '#F3F4F6',
+  grayB:      '#E5E7EB',
+  green:      '#059669',
+  greenL:     '#ECFDF5',
+  red:        '#DC2626',
+  redL:       '#FEF2F2',
+  purple:     '#7C3AED',
+  purpleL:    '#F5F3FF',
+  yellow:     '#F59E0B',
+  free:       '#DC2626',
+};
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 interface AntrianItem {
   id: string; tanggal: string; nomor: number;
   jenis: string; nopol: string;
@@ -23,120 +45,77 @@ interface AntrianItem {
   serviceId: string; serviceName: string; kategori: string; harga: number;
   namaWasher: string; upahWasher?: number;
   namaTP?: string; pendapatanTP?: number;
-  ket: string; status: string; createdAt: string;
+  ket: string; status: string; isFree?: number;
 }
 
-const KAT_MOBIL_OPTIONS: { value: KategoriMobil; label: string; color: string }[] = [
-  { value: 'umum',    label: 'Umum / Medium',  color: '#059669' },
-  { value: 'big',     label: 'Besar / Big',    color: '#DC2626' },
-  { value: 'premium', label: 'Premium',        color: '#7C3AED' },
+interface CarModel { id: string; nama: string; kategori: string; aktif: number }
+interface Karyawan { id: string; nama: string; peran: string; aktif: number }
+
+const KAT_OPTIONS = [
+  { value: 'umum',    label: 'Umum/Medium', color: C.green  },
+  { value: 'big',     label: 'Besar/Big',   color: C.red    },
+  { value: 'premium', label: 'Premium',     color: C.purple },
 ];
 
-function fmt(n: number): string { return n.toLocaleString('id-ID'); }
-function getTodayStr(): string { return new Date().toISOString().split('T')[0]; }
-function formatDateDisplay(s: string): string {
+function fmt(n: number)   { return n.toLocaleString('id-ID'); }
+function todayStr()       { return new Date().toISOString().split('T')[0]; }
+function fmtDate(s: string) {
   return new Date(s).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+}
+function getKatColor(kat?: string) {
+  return kat === 'premium' ? C.purple : kat === 'big' ? C.red : C.green;
+}
+function getStatusColor(s: string) {
+  return s === 'selesai' ? C.green : s === 'proses' ? C.yellow : C.gray;
+}
+function getStatusLabel(s: string) {
+  return s === 'selesai' ? 'Selesai' : s === 'proses' ? 'Proses' : 'Antri';
 }
 
 type Step = 'model' | 'nopol' | 'service' | 'washer';
 const CUCI_TYPES = [
-  { id: 'express',  label: 'EXPRESS',  icon: '⚡' },
-  { id: 'hidrolik', label: 'HIDROLIK', icon: '🔧' },
-];
+  { id: 'express',  label: 'Express',  icon: 'flash',  color: C.yellow },
+  { id: 'hidrolik', label: 'Hidrolik', icon: 'water',  color: C.green  },
+] as const;
 
+// ─── Main Screen ─────────────────────────────────────────────────────────────
 export default function AntrianScreen() {
-  const queryClient = useQueryClient();
-  const today = getTodayStr();
+  const qc   = useQueryClient();
+  const today = todayStr();
 
+  // Modal state
   const [modalVisible, setModalVisible] = useState(false);
   const [step, setStep] = useState<Step>('model');
 
-  // Step 1 — Model
+  // Step 1 – Model
   const [modelSearch, setModelSearch] = useState('');
-  const [selectedCar, setSelectedCar] = useState<CarInfo | null>(null);
+  const [selectedCar, setSelectedCar] = useState<CarModel | null>(null);
   const [cuciType, setCuciType] = useState<'express' | 'hidrolik'>('express');
 
-  // Step 2 — Nopol
+  // Step 2 – Nopol
   const [formNopol, setFormNopol] = useState('');
 
-  // Step 3 — Service
-  const [formServiceId, setFormServiceId] = useState('');
-  const [formServiceName, setFormServiceName] = useState('');
-  const [formKategori, setFormKategori] = useState('');
-  const [formHarga, setFormHarga] = useState(0);
-  // upah washer cuci (dari kategori mobil)
-  const [formUpahWasher, setFormUpahWasher] = useState(0);
-  // TP fields
+  // Step 3 – Service
+  const [formServiceId, setFormServiceId]       = useState('');
+  const [formServiceName, setFormServiceName]   = useState('');
+  const [formKategori, setFormKategori]         = useState('');
+  const [formHarga, setFormHarga]               = useState(0);
+  const [formUpahWasher, setFormUpahWasher]     = useState(0);
   const [formPendapatanTP, setFormPendapatanTP] = useState(0);
-  const [formSelectedService, setFormSelectedService] = useState<Service | null>(null);
-  const [showServicePicker, setShowServicePicker] = useState(false);
-  // Untuk Poles: kategori mobil (jenis cuci selalu hidrolik)
-  const [polesKatMobil, setPolesKatMobil] = useState<KategoriMobil | null>(null);
+  const [formSelectedSvc, setFormSelectedSvc]   = useState<Service | null>(null);
+  const [showSvcPicker, setShowSvcPicker]       = useState(false);
+  const [polesKat, setPolesKat]                 = useState<KategoriMobil | null>(null);
 
-  // Step 4 — Washer & TP
-  const [formWasher, setFormWasher] = useState('');
-  const [formKet, setFormKet] = useState('');
-  const [customWasher, setCustomWasher] = useState('');
-  const [showCustomWasher, setShowCustomWasher] = useState(false);
-  const [formTPName, setFormTPName] = useState('');
-  const [showCustomTP, setShowCustomTP] = useState(false);
-  const [customTPName, setCustomTPName] = useState('');
-  const [formIsFree, setFormIsFree] = useState(false);
+  // Step 4 – Washer & TP & FREE
+  const [formWasher, setFormWasher]     = useState('');
+  const [formTPName, setFormTPName]     = useState('');
+  const [formKet, setFormKet]           = useState('');
+  const [formIsFree, setFormIsFree]     = useState(false);
 
+  // Detail modal
   const [selectedItem, setSelectedItem] = useState<AntrianItem | null>(null);
 
-  // ── DB: Karyawan aktif ──
-  const { data: karyawanList } = useQuery({
-    queryKey: ['karyawan'],
-    queryFn: async () => {
-      const res = await blink.db.karyawan.list({ where: { aktif: '1' }, orderBy: { nama: 'asc' } });
-      return res as any[];
-    },
-  });
-  const washerList = karyawanList?.filter((k: any) => k.peran === 'washer' || k.peran === 'both').map((k: any) => k.nama) || [];
-  const tpList    = karyawanList?.filter((k: any) => k.peran === 'tp'     || k.peran === 'both').map((k: any) => k.nama) || [];
-
-  // ── DB: Car models ──
-  const { data: dbCars } = useQuery({
-    queryKey: ['car_models'],
-    queryFn: async () => {
-      const res = await blink.db.carModels.list({ where: { aktif: '1' }, orderBy: { nama: 'asc' } });
-      return res as any[];
-    },
-  });
-
-  // ── DB: App settings ──
-  const { data: settingsList } = useQuery({
-    queryKey: ['app_settings'],
-    queryFn: async () => {
-      const res = await blink.db.appSettings.list();
-      return res as any[];
-    },
-  });
-  const kasirAktif = settingsList?.find((s: any) => s.key === 'kasir_aktif')?.value || '';
-  const shiftAktif = settingsList?.find((s: any) => s.key === 'shift_aktif')?.value || '1';
-
-  // ── Gabung ALL_CARS + dbCars (deduplikasi) ──
-  const allCarsList = useMemo(() => {
-    const dbCarList = (dbCars || []).map((c: any) => ({
-      model: c.nama,
-      kategori: c.kategori as KategoriMobil,
-    }));
-    const combined = [...ALL_CARS, ...dbCarList];
-    const seen = new Set<string>();
-    return combined.filter(c => {
-      if (seen.has(c.model)) return false;
-      seen.add(c.model);
-      return true;
-    }).sort((a, b) => a.model.localeCompare(b.model));
-  }, [dbCars]);
-
-  const filteredCars = useMemo(() => {
-    const q = modelSearch.trim().toLowerCase();
-    if (!q) return allCarsList;
-    return allCarsList.filter(c => c.model.toLowerCase().includes(q));
-  }, [modelSearch, allCarsList]);
-
+  // ── Data Fetching ──
   const { data: antrian, isLoading } = useQuery({
     queryKey: ['antrian', today],
     queryFn: async () => {
@@ -145,226 +124,261 @@ export default function AntrianScreen() {
     },
   });
 
-  const nomorBerikut = (antrian?.length || 0) + 1;
-  const totalOmset   = antrian?.reduce((sum, a) => sum + (Number((a as any).isFree) > 0 ? 0 : (a.harga || 0)), 0) || 0;
-  const totalSelesai = antrian?.filter(a => a.status === 'selesai').length || 0;
-  const totalUpah    = antrian?.reduce((sum, a) => sum + ((a as any).upahWasher || 0), 0) || 0;
-  const totalTP      = antrian?.reduce((sum, a) => sum + ((a as any).pendapatanTP || 0), 0) || 0;
+  const { data: cars } = useQuery({
+    queryKey: ['car_models'],
+    queryFn: async () => {
+      const res = await blink.db.carModels.list({ orderBy: { nama: 'asc' } });
+      return (res as CarModel[]).filter(c => Number(c.aktif) > 0);
+    },
+  });
 
-  /** Terapkan layanan cuci biasa berdasar model + jenis cuci */
-  const applyCarService = (car: CarInfo, type: 'express' | 'hidrolik') => {
-    const harga = KATEGORI_MOBIL_PRICE[car.kategori][type];
-    const upah  = WASHER_UPAH[car.kategori][type];
-    const svcName = type === 'express'
-      ? (car.kategori === 'umum' ? 'EXPRESS SMALL/MEDIUM' : car.kategori === 'big' ? 'EXPRESS BESAR/SUV' : 'EXPRESS ALPHARD DAN SEJENISNYA')
-      : (car.kategori === 'umum' ? 'HIDROLIK SMALL/MEDIUM' : car.kategori === 'big' ? 'HIDROLIK BESAR/SUV' : 'HIDROLIK ALPHARD DAN SEJENISNYA');
-    const svc = SERVICES.find(s => s.name === svcName && s.kategori === 'Reguler');
-    setFormServiceId(svc?.id || `${type}_${car.kategori}`);
-    setFormServiceName(svcName);
+  const { data: karyawan } = useQuery({
+    queryKey: ['karyawan'],
+    queryFn: async () => {
+      const res = await blink.db.karyawan.list({ orderBy: { nama: 'asc' } });
+      return (res as Karyawan[]).filter(k => Number(k.aktif) > 0);
+    },
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['app_settings'],
+    queryFn: async () => {
+      const res = await blink.db.appSettings.list();
+      const map: Record<string, string> = {};
+      (res as any[]).forEach(s => { map[s.key] = s.value; });
+      return map;
+    },
+  });
+
+  const washerList = (karyawan || []).filter(k => k.peran === 'washer' || k.peran === 'both');
+  const tpList     = (karyawan || []).filter(k => k.peran === 'tp'     || k.peran === 'both');
+
+  // ── Stats ──
+  const nomorBerikut = (antrian?.length || 0) + 1;
+  const paidAntrian  = antrian?.filter(a => !Number((a as any).isFree)) || [];
+  const totalOmset   = paidAntrian.reduce((s, a) => s + (a.harga || 0), 0);
+  const totalSelesai = antrian?.filter(a => a.status === 'selesai').length || 0;
+  const totalFree    = antrian?.filter(a => Number((a as any).isFree) > 0).length || 0;
+
+  // ── Filtered cars ──
+  const filteredCars = useMemo(() => {
+    const q = modelSearch.trim().toLowerCase();
+    if (!q) return cars || [];
+    return (cars || []).filter(c => c.nama.toLowerCase().includes(q));
+  }, [modelSearch, cars]);
+
+  // ── Upah washer dari settings ──
+  const getUpahFromSettings = (kat: string, type: 'express' | 'hidrolik') => {
+    const key = `upah_washer_${kat}_${type}`;
+    const val = settings?.[key];
+    if (val) return parseInt(val) || 0;
+    return WASHER_UPAH[kat as KategoriMobil]?.[type] || 0;
+  };
+
+  // ── Apply services ──
+  const applyCarService = (car: CarModel, type: 'express' | 'hidrolik') => {
+    const kat = car.kategori as KategoriMobil;
+    const harga = KATEGORI_MOBIL_PRICE[kat][type];
+    const upah  = getUpahFromSettings(kat, type);
+    const nm = type === 'express'
+      ? (kat === 'umum' ? 'EXPRESS SMALL/MEDIUM' : kat === 'big' ? 'EXPRESS BESAR/SUV' : 'EXPRESS ALPHARD DAN SEJENISNYA')
+      : (kat === 'umum' ? 'HIDROLIK SMALL/MEDIUM' : kat === 'big' ? 'HIDROLIK BESAR/SUV' : 'HIDROLIK ALPHARD DAN SEJENISNYA');
+    const svc = SERVICES.find(sv => sv.name === nm);
+    setFormServiceId(svc?.id || `${type}_${kat}`);
+    setFormServiceName(nm);
     setFormKategori('Reguler');
     setFormHarga(harga);
     setFormUpahWasher(upah);
-    setFormSelectedService(svc || null);
+    setFormSelectedSvc(svc || null);
     setFormPendapatanTP(0);
-    setPolesKatMobil(null);
-    setShowServicePicker(false);
+    setPolesKat(null);
+    setShowSvcPicker(false);
   };
 
-  /** Terapkan layanan manual (Poles/Paket/Premium) */
   const applyManualService = (svc: Service, kat?: KategoriMobil) => {
     setFormServiceId(svc.id);
     setFormServiceName(svc.name);
     setFormKategori(svc.kategori);
     setFormHarga(svc.harga as number);
-    setFormSelectedService(svc);
-
+    setFormSelectedSvc(svc);
     if (svc.isPolesDinamis) {
-      const resolvedKat = kat || polesKatMobil || selectedCar?.kategori || 'umum';
-      // Poles selalu dicuci hidrolik
-      const upahCuci = WASHER_UPAH[resolvedKat]['hidrolik'];
-      const pendTP   = getPendapatanTPPoles(svc, resolvedKat);
-      setFormUpahWasher(upahCuci);
-      setFormPendapatanTP(pendTP);
+      const rk = kat || polesKat || (selectedCar?.kategori as KategoriMobil) || 'umum';
+      setFormUpahWasher(getUpahFromSettings(rk, 'hidrolik'));
+      setFormPendapatanTP(getPendapatanTPPoles(svc, rk));
     } else if (svc.hasTP) {
-      // Premium/Paket: washer dapat upahWasherTP, TP dapat upahTP
       setFormUpahWasher(getUpahWasherTP(svc));
       setFormPendapatanTP(getPendapatanTPTetap(svc));
     } else {
-      const upah = selectedCar ? WASHER_UPAH[selectedCar.kategori][cuciType] : 0;
-      setFormUpahWasher(upah);
+      setFormUpahWasher(selectedCar ? getUpahFromSettings(selectedCar.kategori, cuciType) : 0);
       setFormPendapatanTP(0);
     }
   };
 
+  // ── Mutations ──
   const addMutation = useMutation({
     mutationFn: async () => {
-      const washer = showCustomWasher ? customWasher.trim() : formWasher;
-      const namaTP = showCustomTP ? customTPName.trim() : formTPName;
-      if (!selectedCar)          throw new Error('Pilih model mobil');
-      if (!formNopol.trim())     throw new Error('Masukkan nomor polisi');
-      if (!washer)               throw new Error('Pilih atau isi nama washer');
-      if (formSelectedService?.hasTP && !namaTP) throw new Error('Isi nama TP untuk layanan ini');
+      if (!selectedCar)       throw new Error('Pilih model mobil');
+      if (!formNopol.trim())  throw new Error('Masukkan nomor polisi');
+      if (!formWasher.trim()) throw new Error('Pilih atau isi nama washer');
+      if (formSelectedSvc?.hasTP && !formTPName.trim()) throw new Error('Isi nama TP');
 
       await blink.db.antrian.create({
-        id: `ant_${Date.now()}`,
-        tanggal: today,
-        nomor: nomorBerikut,
-        jenis: KATEGORI_MOBIL_LABEL[selectedCar.kategori],
-        nopol: formNopol.trim().toUpperCase(),
-        modelMobil: selectedCar.model,
-        kategoriMobil: selectedCar.kategori,
-        serviceId: formServiceId,
-        serviceName: formServiceName,
-        kategori: formKategori,
-        harga: formIsFree ? 0 : formHarga,
-        namaWasher: washer,
-        upahWasher: formIsFree ? 0 : formUpahWasher,
-        namaTP: namaTP || '',
+        id:           `ant_${Date.now()}`,
+        tanggal:      today,
+        nomor:        nomorBerikut,
+        jenis:        KATEGORI_MOBIL_LABEL[selectedCar.kategori as KategoriMobil] || selectedCar.kategori,
+        nopol:        formNopol.trim().toUpperCase(),
+        modelMobil:   selectedCar.nama,
+        kategoriMobil:selectedCar.kategori,
+        serviceId:    formServiceId,
+        serviceName:  formServiceName,
+        kategori:     formKategori,
+        harga:        formIsFree ? 0 : formHarga,
+        namaWasher:   formWasher.trim(),
+        upahWasher:   formIsFree ? 0 : formUpahWasher,
+        namaTP:       formTPName.trim() || '',
         pendapatanTP: formIsFree ? 0 : formPendapatanTP,
-        ket: formKet.trim(),
-        isFree: formIsFree ? 1 : 0,
-        status: 'antri',
+        ket:          formKet.trim(),
+        status:       'antri',
+        isFree:       formIsFree ? 1 : 0,
       });
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['antrian', today] }); closeModal(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['antrian', today] }); closeModal(); },
     onError:   (e: any) => Alert.alert('Error', e.message),
   });
 
-  const updateStatusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => blink.db.antrian.update(id, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['antrian', today] }),
+  const statusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) =>
+      blink.db.antrian.update(id, { status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['antrian', today] }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => blink.db.antrian.delete(id),
-    onSuccess:  () => { queryClient.invalidateQueries({ queryKey: ['antrian', today] }); setSelectedItem(null); },
+    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['antrian', today] }); setSelectedItem(null); },
   });
 
+  // ── Modal helpers ──
   const openModal = () => {
     setStep('model'); setModelSearch(''); setSelectedCar(null); setCuciType('express');
     setFormNopol(''); setFormServiceId(''); setFormServiceName(''); setFormKategori('');
-    setFormHarga(0); setFormUpahWasher(0); setFormWasher(''); setFormKet('');
-    setCustomWasher(''); setShowCustomWasher(false); setFormSelectedService(null);
-    setFormPendapatanTP(0); setFormTPName(''); setShowCustomTP(false);
-    setCustomTPName(''); setShowServicePicker(false); setPolesKatMobil(null);
-    setFormIsFree(false);
+    setFormHarga(0); setFormUpahWasher(0); setFormWasher(''); setFormTPName('');
+    setFormKet(''); setFormSelectedSvc(null); setFormPendapatanTP(0);
+    setShowSvcPicker(false); setPolesKat(null); setFormIsFree(false);
     setModalVisible(true);
   };
   const closeModal = () => setModalVisible(false);
 
-  const handleDeleteConfirm = (item: AntrianItem) =>
-    Alert.alert('Hapus', `Hapus data mobil ${item.nopol}?`, [
-      { text: 'Batal', style: 'cancel' },
-      { text: 'Hapus', style: 'destructive', onPress: () => deleteMutation.mutate(item.id) },
-    ]);
+  const needsTP = !!formSelectedSvc?.hasTP;
+  const isPoles = !!formSelectedSvc?.isPolesDinamis;
 
-  const getStatusColor = (s: string) => s === 'selesai' ? '#10B981' : s === 'proses' ? '#F59E0B' : '#6B7280';
-  const getStatusLabel = (s: string) => s === 'selesai' ? 'Selesai' : s === 'proses' ? 'Proses' : 'Antri';
-  const getKatColor = (kat?: string) => kat === 'premium' ? '#7C3AED' : kat === 'big' ? '#DC2626' : '#059669';
-
-  const steps: Step[] = ['model', 'nopol', 'service', 'washer'];
-  const needsTP = !!formSelectedService?.hasTP;
-  const isPoles = !!formSelectedService?.isPolesDinamis;
-
+  // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={s.safeArea} edges={['top']}>
-      {/* Header */}
+    <SafeAreaView style={s.safe} edges={['top']}>
+
+      {/* ── Header ── */}
       <View style={s.header}>
         <View>
           <Text style={s.headerTitle}>ANTRIAN CUCI</Text>
-          <Text style={s.headerSub}>{formatDateDisplay(today)} · Orange Carwash</Text>
+          <Text style={s.headerSub}>{fmtDate(today)}</Text>
         </View>
-        <View style={s.headerRight}>
-          {kasirAktif ? (
-            <View style={s.kasirBadge}>
-              <Ionicons name="person-circle-outline" size={12} color="#FED7AA" />
-              <Text style={s.kasirBadgeText}>{kasirAktif} · S{shiftAktif}</Text>
-            </View>
-          ) : null}
-          <TouchableOpacity style={s.addBtn} onPress={openModal}>
-            <Ionicons name="add" size={20} color="#fff" />
-            <Text style={s.addBtnText}>Tambah</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={s.addBtn} onPress={openModal}>
+          <Ionicons name="add-circle" size={22} color={C.white} />
+          <Text style={s.addBtnTxt}>TAMBAH</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Stats */}
+      {/* ── Stats Bar ── */}
       <View style={s.statsBar}>
-        <StatItem value={antrian?.length || 0} label="Total" />
-        <View style={s.statDiv} />
-        <StatItem value={antrian?.filter(a => a.status === 'proses').length || 0} label="Proses" color="#F59E0B" />
-        <View style={s.statDiv} />
-        <StatItem value={totalSelesai} label="Selesai" color="#10B981" />
-        <View style={s.statDiv} />
-        <StatItem value={fmt(totalOmset)} label="Omset" color="#E85D04" small />
-        <View style={s.statDiv} />
-        <StatItem value={fmt(totalUpah)} label="Washer" color="#059669" small />
-        <View style={s.statDiv} />
-        <StatItem value={fmt(totalTP)} label="TP" color="#7C3AED" small />
+        <StatCard label="Total" value={antrian?.length || 0} icon="car" color={C.orange} />
+        <StatCard label="Proses" value={antrian?.filter(a => a.status === 'proses').length || 0} icon="construct" color={C.yellow} />
+        <StatCard label="Selesai" value={totalSelesai} icon="checkmark-circle" color={C.green} />
+        <StatCard label="FREE" value={totalFree} icon="gift" color={C.red} />
+        <StatCard label="Omset" value={`${fmt(totalOmset)}`} icon="cash" color={C.purple} small />
       </View>
 
-      {/* Table header */}
+      {/* ── Table Header ── */}
       <View style={s.tableHead}>
-        <Text style={[s.th, { width: 26 }]}>NO</Text>
-        <Text style={[s.th, { width: 68 }]}>NOPOL</Text>
+        <Text style={[s.th, { width: 28 }]}>#</Text>
+        <Text style={[s.th, { width: 72 }]}>NOPOL</Text>
         <Text style={[s.th, { flex: 1 }]}>MODEL / LAYANAN</Text>
-        <Text style={[s.th, { width: 56, textAlign: 'right' }]}>HARGA</Text>
-        <Text style={[s.th, { width: 52, textAlign: 'right' }]}>UPAH</Text>
-        <Text style={[s.th, { width: 50, textAlign: 'center' }]}>STATUS</Text>
+        <Text style={[s.th, { width: 58, textAlign: 'right' }]}>HARGA</Text>
+        <Text style={[s.th, { width: 54, textAlign: 'right' }]}>UPAH</Text>
+        <Text style={[s.th, { width: 52, textAlign: 'center' }]}>STATUS</Text>
       </View>
 
+      {/* ── List ── */}
       {isLoading ? (
-        <View style={s.emptyBox}><Ionicons name="hourglass" size={36} color="#E85D04" /><Text style={s.emptyText}>Memuat...</Text></View>
+        <View style={s.centerBox}>
+          <Ionicons name="hourglass" size={36} color={C.orange} />
+          <Text style={s.emptyTxt}>Memuat data...</Text>
+        </View>
       ) : !antrian?.length ? (
-        <View style={s.emptyBox}>
-          <Ionicons name="car-outline" size={60} color="#D1D5DB" />
+        <View style={s.centerBox}>
+          <Ionicons name="car-outline" size={64} color={C.grayB} />
           <Text style={s.emptyTitle}>Belum Ada Antrian</Text>
-          <Text style={s.emptyText}>Tap tombol Tambah untuk mencatat mobil masuk</Text>
+          <Text style={s.emptyTxt}>Tap TAMBAH untuk mencatat mobil masuk</Text>
           <TouchableOpacity style={s.emptyAddBtn} onPress={openModal}>
-            <Ionicons name="add-circle" size={18} color="#fff" />
-            <Text style={s.emptyAddText}>Tambah Mobil</Text>
+            <Ionicons name="add-circle" size={18} color={C.white} />
+            <Text style={s.emptyAddTxt}>Tambah Mobil</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <FlatList
-          data={antrian} keyExtractor={item => item.id}
-          contentContainerStyle={{ paddingBottom: 60 }}
+          data={antrian}
+          keyExtractor={i => i.id}
+          contentContainerStyle={{ paddingBottom: 80 }}
           renderItem={({ item }) => {
+            const isFree     = Number((item as any).isFree) > 0;
             const katColor   = getKatColor((item as any).kategoriMobil);
             const upahWasher = (item as any).upahWasher || 0;
             const pendTP     = (item as any).pendapatanTP || 0;
             const namaTP     = (item as any).namaTP || '';
-            const isFreeItem = Number((item as any).isFree) > 0;
             return (
-              <TouchableOpacity style={[s.tableRow, item.status === 'selesai' && s.tableRowDone]}
-                onPress={() => setSelectedItem(item)} activeOpacity={0.7}>
-                <Text style={s.tdNo}>{item.nomor}</Text>
-                <View style={{ width: 68 }}>
-                  <Text style={[s.tdBold, item.status === 'selesai' && s.tdDone]} numberOfLines={1}>{item.nopol}</Text>
-                  <Text style={s.tdSub} numberOfLines={1}>{item.namaWasher}</Text>
+              <TouchableOpacity
+                style={[s.row, item.status === 'selesai' && s.rowDone, isFree && s.rowFree]}
+                onPress={() => setSelectedItem(item)}
+                activeOpacity={0.75}
+              >
+                <View style={[s.rowNo, isFree && { backgroundColor: C.red }]}>
+                  <Text style={[s.rowNoTxt, isFree && { color: C.white }]}>{item.nomor}</Text>
+                </View>
+                <View style={{ width: 72 }}>
+                  <Text style={[s.rowNopol, item.status === 'selesai' && s.txtDone]} numberOfLines={1}>
+                    {item.nopol}
+                  </Text>
+                  <Text style={s.rowWasher} numberOfLines={1}>{item.namaWasher}</Text>
                 </View>
                 <View style={{ flex: 1, paddingRight: 4 }}>
                   {(item as any).modelMobil ? (
-                    <View style={[s.katBadge, { backgroundColor: katColor, alignSelf: 'flex-start', marginBottom: 2 }]}>
-                      <Text style={s.katBadgeText}>{(item as any).modelMobil}</Text>
+                    <View style={[s.modelBadge, { backgroundColor: katColor }]}>
+                      <Text style={s.modelBadgeTxt} numberOfLines={1}>{(item as any).modelMobil}</Text>
                     </View>
                   ) : null}
-                  <Text style={[s.tdSvc, item.status === 'selesai' && s.tdDone]} numberOfLines={1}>{item.serviceName}</Text>
-                  {namaTP ? <Text style={s.tdTP}>TP: {namaTP}</Text> : null}
-                  {isFreeItem ? (
-                    <View style={s.freeBadge}><Text style={s.freeBadgeText}>FREE</Text></View>
-                  ) : null}
+                  <Text style={[s.rowSvc, item.status === 'selesai' && s.txtDone]} numberOfLines={1}>
+                    {item.serviceName}
+                  </Text>
+                  {namaTP ? <Text style={s.rowTP}>TP: {namaTP}</Text> : null}
                 </View>
-                <Text style={[s.tdPrice, isFreeItem && s.tdPriceFree]}>
-                  {isFreeItem ? 'FREE' : fmt(item.harga)}
-                </Text>
-                <View style={{ width: 52, alignItems: 'flex-end' }}>
-                  {upahWasher > 0 && <Text style={s.tdUpah}>{fmt(upahWasher)}</Text>}
-                  {pendTP > 0 && <Text style={s.tdTPVal}>TP {fmt(pendTP)}</Text>}
+                {isFree ? (
+                  <View style={s.freeBadge}>
+                    <Ionicons name="gift" size={11} color={C.white} />
+                    <Text style={s.freeBadgeTxt}>FREE</Text>
+                  </View>
+                ) : (
+                  <Text style={s.rowPrice}>{fmt(item.harga)}</Text>
+                )}
+                <View style={{ width: 54, alignItems: 'flex-end' }}>
+                  {isFree ? null : (
+                    <>
+                      {upahWasher > 0 && <Text style={s.rowUpah}>{fmt(upahWasher)}</Text>}
+                      {pendTP > 0     && <Text style={s.rowTPVal}>+{fmt(pendTP)}</Text>}
+                    </>
+                  )}
                 </View>
-                <View style={{ width: 50, alignItems: 'center' }}>
+                <View style={{ width: 52, alignItems: 'center' }}>
                   <View style={[s.statusPill, { backgroundColor: getStatusColor(item.status) }]}>
-                    <Text style={s.statusPillText}>{getStatusLabel(item.status)}</Text>
+                    <Text style={s.statusPillTxt}>{getStatusLabel(item.status)}</Text>
                   </View>
                 </View>
               </TouchableOpacity>
@@ -373,84 +387,118 @@ export default function AntrianScreen() {
         />
       )}
 
-      {/* ========== ADD MODAL ========== */}
+      {/* ════════════════ TAMBAH MODAL ════════════════ */}
       <Modal visible={modalVisible} animationType="slide" onRequestClose={closeModal}>
         <SafeAreaView style={s.modalSafe}>
+          {/* Modal Header */}
           <View style={s.modalHeader}>
             <TouchableOpacity onPress={() => {
               if (step === 'model') closeModal();
-              else if (step === 'nopol') setStep('model');
+              else if (step === 'nopol')   setStep('model');
               else if (step === 'service') setStep('nopol');
               else setStep('service');
             }}>
-              <Ionicons name={step === 'model' ? 'close' : 'arrow-back'} size={24} color="#fff" />
+              <Ionicons name={step === 'model' ? 'close' : 'arrow-back'} size={24} color={C.white} />
             </TouchableOpacity>
             <View style={{ alignItems: 'center' }}>
-              <Text style={s.modalTitle}>Tambah Antrian</Text>
+              <Text style={s.modalTitle}>TAMBAH ANTRIAN</Text>
               <Text style={s.modalSub}>
-                {step === 'model' ? '① Model Mobil' : step === 'nopol' ? '② Nomor Polisi'
-                  : step === 'service' ? '③ Pilih Layanan' : '④ Washer & TP'}
+                {step === 'model'   ? '① Pilih Model Mobil'
+                 : step === 'nopol'   ? '② Nomor Polisi'
+                 : step === 'service' ? '③ Pilih Layanan'
+                 :                     '④ Washer & Opsi'}
               </Text>
             </View>
             <View style={{ width: 24 }} />
           </View>
 
-          {/* Step dots */}
-          <View style={s.stepRow}>
-            {steps.map((st, i) => (
-              <View key={st} style={s.stepItem}>
-                <View style={[s.stepDot, step === st && s.stepDotActive, steps.indexOf(step) > i && s.stepDotDone]}>
-                  <Text style={[s.stepDotText, (step === st || steps.indexOf(step) > i) && s.stepDotTextActive]}>{i + 1}</Text>
+          {/* Step Dots */}
+          <View style={s.stepBar}>
+            {(['model', 'nopol', 'service', 'washer'] as Step[]).map((st, i) => {
+              const idx = ['model', 'nopol', 'service', 'washer'].indexOf(step);
+              const done = idx > i;
+              const active = step === st;
+              return (
+                <View key={st} style={s.stepItem}>
+                  <View style={[s.stepDot, active && s.stepDotA, done && s.stepDotD]}>
+                    {done
+                      ? <Ionicons name="checkmark" size={12} color={C.white} />
+                      : <Text style={[s.stepDotTxt, (active || done) && { color: C.white }]}>{i + 1}</Text>
+                    }
+                  </View>
+                  {i < 3 && <View style={[s.stepLine, done && s.stepLineD]} />}
                 </View>
-                {i < 3 && <View style={[s.stepLine, steps.indexOf(step) > i && s.stepLineDone]} />}
-              </View>
-            ))}
+              );
+            })}
           </View>
 
           {/* ── STEP 1: MODEL ── */}
           {step === 'model' && (
             <View style={{ flex: 1 }}>
-              <View style={s.searchBox}>
-                <Ionicons name="search" size={18} color="#9CA3AF" />
-                <TextInput style={s.searchInput} placeholder="Cari model... (Avanza, Fortuner, Alphard)"
-                  value={modelSearch} onChangeText={setModelSearch} placeholderTextColor="#9CA3AF" autoFocus />
+              <View style={s.searchWrap}>
+                <Ionicons name="search" size={18} color={C.gray} />
+                <TextInput style={s.searchInput} placeholder="Cari model mobil..."
+                  value={modelSearch} onChangeText={setModelSearch}
+                  placeholderTextColor={C.gray} autoFocus />
                 {modelSearch.length > 0 && (
                   <TouchableOpacity onPress={() => setModelSearch('')}>
-                    <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                    <Ionicons name="close-circle" size={18} color={C.gray} />
                   </TouchableOpacity>
                 )}
               </View>
-              <View style={s.legendRow}>
-                {KAT_MOBIL_OPTIONS.map(o => (
-                  <View key={o.value} style={s.legendItem}>
-                    <View style={[s.legendDot, { backgroundColor: o.color }]} />
-                    <Text style={s.legendText}>{o.label}</Text>
+
+              {/* Legenda */}
+              <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingBottom: 6 }}>
+                {KAT_OPTIONS.map(o => (
+                  <View key={o.value} style={[s.katLegend, { backgroundColor: o.color + '18' }]}>
+                    <View style={[s.katDot, { backgroundColor: o.color }]} />
+                    <Text style={[s.katLegendTxt, { color: o.color }]}>{o.label}</Text>
                   </View>
                 ))}
               </View>
-              <FlatList
-                data={filteredCars} keyExtractor={item => item.model} style={{ flex: 1 }} initialNumToRender={20}
-                renderItem={({ item }) => {
-                  const kc = getKatColor(item.kategori);
-                  const isSel = selectedCar?.model === item.model;
-                  return (
-                    <TouchableOpacity style={[s.carItem, isSel && s.carItemSel]} onPress={() => setSelectedCar(item)}>
-                      <View style={[s.carKatDot, { backgroundColor: kc }]} />
-                      <Text style={[s.carModel, isSel && s.carModelSel]}>{item.model}</Text>
-                      <Text style={[s.carKatLbl, { color: kc }]}>{KATEGORI_MOBIL_LABEL[item.kategori]}</Text>
-                      {isSel && <Ionicons name="checkmark-circle" size={20} color={kc} />}
-                    </TouchableOpacity>
-                  );
-                }}
-              />
+
+              {cars?.length === 0 ? (
+                <View style={s.centerBox}>
+                  <Ionicons name="car-outline" size={48} color={C.grayB} />
+                  <Text style={s.emptyTitle}>Belum ada mobil</Text>
+                  <Text style={s.emptyTxt}>Tambahkan mobil di menu Pengaturan → Mobil</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredCars}
+                  keyExtractor={c => c.id}
+                  initialNumToRender={20}
+                  renderItem={({ item: car }) => {
+                    const opt = KAT_OPTIONS.find(o => o.value === car.kategori) || KAT_OPTIONS[0];
+                    const sel = selectedCar?.id === car.id;
+                    return (
+                      <TouchableOpacity
+                        style={[s.carRow, sel && s.carRowSel]}
+                        onPress={() => setSelectedCar(car)}
+                      >
+                        <View style={[s.katDot, { backgroundColor: opt.color, width: 10, height: 10 }]} />
+                        <Text style={[s.carNama, sel && { color: C.orange }]}>{car.nama}</Text>
+                        <View style={[s.katBadgeSm, { backgroundColor: opt.color + '20' }]}>
+                          <Text style={[s.katBadgeSmTxt, { color: opt.color }]}>{opt.label}</Text>
+                        </View>
+                        {sel && <Ionicons name="checkmark-circle" size={20} color={C.orange} />}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              )}
+
               {selectedCar && (
-                <View style={s.carSelBar}>
+                <View style={s.bottomBar}>
                   <View style={{ flex: 1 }}>
-                    <Text style={s.carSelName}>{selectedCar.model}</Text>
-                    <Text style={s.carSelKat}>{KATEGORI_MOBIL_LABEL[selectedCar.kategori]}</Text>
+                    <Text style={s.bottomBarName}>{selectedCar.nama}</Text>
+                    <Text style={s.bottomBarSub}>
+                      {KAT_OPTIONS.find(o => o.value === selectedCar.kategori)?.label}
+                    </Text>
                   </View>
-                  <TouchableOpacity style={s.nextBtnSm} onPress={() => setStep('nopol')}>
-                    <Text style={s.nextBtnSmText}>Lanjut →</Text>
+                  <TouchableOpacity style={s.nextBtn} onPress={() => setStep('nopol')}>
+                    <Text style={s.nextBtnTxt}>Lanjut</Text>
+                    <Ionicons name="arrow-forward" size={16} color={C.white} />
                   </TouchableOpacity>
                 </View>
               )}
@@ -459,26 +507,30 @@ export default function AntrianScreen() {
 
           {/* ── STEP 2: NOPOL ── */}
           {step === 'nopol' && (
-            <ScrollView contentContainerStyle={{ padding: 16 }}>
-              <Text style={s.stepLbl}>Nomor Polisi</Text>
-              <View style={s.nopolPreview}>
-                <View style={s.nopolPlate}>
-                  <Text style={s.nopolPlateText}>{formNopol || 'H 1234 AB'}</Text>
+            <ScrollView contentContainerStyle={{ padding: 18 }}>
+              <Text style={s.stepLabel}>Nomor Polisi</Text>
+              <View style={s.platePrev}>
+                <View style={s.plate}>
+                  <Text style={s.plateTxt}>{formNopol || 'H 1234 AB'}</Text>
                 </View>
                 {selectedCar && (
-                  <View style={s.nopolCarInfo}>
-                    <View style={[s.katBadgeLg, { backgroundColor: getKatColor(selectedCar.kategori) }]}>
-                      <Text style={s.katBadgeLgText}>{selectedCar.model}</Text>
-                    </View>
-                    <Text style={s.nopolHint}>{KATEGORI_MOBIL_LABEL[selectedCar.kategori]}</Text>
+                  <View style={[s.katBadgeSm, { backgroundColor: getKatColor(selectedCar.kategori) + '20', marginTop: 10 }]}>
+                    <Text style={[s.katBadgeSmTxt, { color: getKatColor(selectedCar.kategori) }]}>
+                      {selectedCar.nama}
+                    </Text>
                   </View>
                 )}
               </View>
-              <TextInput style={s.nopolInput} placeholder="Contoh: H 1234 AB"
-                value={formNopol} onChangeText={v => setFormNopol(v.toUpperCase())}
-                autoCapitalize="characters" autoFocus placeholderTextColor="#9CA3AF" />
+              <TextInput style={s.nopolInput}
+                placeholder="Contoh: H 1234 AB"
+                value={formNopol}
+                onChangeText={v => setFormNopol(v.toUpperCase())}
+                autoCapitalize="characters"
+                autoFocus
+                placeholderTextColor={C.gray}
+              />
               <TouchableOpacity
-                style={[s.nextBtn, !formNopol.trim() && s.nextBtnDis]}
+                style={[s.bigBtn, !formNopol.trim() && s.bigBtnDis]}
                 onPress={() => {
                   if (!formNopol.trim()) return;
                   if (selectedCar) applyCarService(selectedCar, cuciType);
@@ -486,7 +538,7 @@ export default function AntrianScreen() {
                 }}
                 disabled={!formNopol.trim()}
               >
-                <Text style={s.nextBtnText}>Lanjut →</Text>
+                <Text style={s.bigBtnTxt}>Lanjut →</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
@@ -494,100 +546,89 @@ export default function AntrianScreen() {
           {/* ── STEP 3: LAYANAN ── */}
           {step === 'service' && selectedCar && (
             <ScrollView contentContainerStyle={{ padding: 16 }}>
-              <Text style={s.stepLbl}>Jenis Cuci</Text>
-
-              {/* Toggle Express / Hidrolik (untuk cuci biasa) */}
-              <View style={s.cuciToggle}>
+              <Text style={s.stepLabel}>Jenis Cuci</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                 {CUCI_TYPES.map(ct => (
                   <TouchableOpacity
                     key={ct.id}
-                    style={[s.cuciBtn, cuciType === ct.id && !showServicePicker && s.cuciBtnActive]}
+                    style={[s.cuciBtn, cuciType === ct.id && !showSvcPicker && { borderColor: ct.color, backgroundColor: ct.color + '18' }]}
                     onPress={() => {
-                      const t = ct.id as 'express' | 'hidrolik';
-                      setCuciType(t);
-                      setShowServicePicker(false);
-                      applyCarService(selectedCar, t);
+                      setCuciType(ct.id);
+                      setShowSvcPicker(false);
+                      applyCarService(selectedCar, ct.id);
                     }}
                   >
-                    <Text style={s.cuciIcon}>{ct.icon}</Text>
-                    <Text style={[s.cuciBtnText, cuciType === ct.id && !showServicePicker && s.cuciBtnTextActive]}>
+                    <Ionicons name={ct.icon as any} size={22} color={cuciType === ct.id && !showSvcPicker ? ct.color : C.gray} />
+                    <Text style={[s.cuciBtnTxt, cuciType === ct.id && !showSvcPicker && { color: ct.color, fontWeight: '800' }]}>
                       {ct.label}
+                    </Text>
+                    <Text style={s.cuciBtnPrice}>
+                      Rp {fmt(KATEGORI_MOBIL_PRICE[selectedCar.kategori as KategoriMobil][ct.id])}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
-              {/* Tombol layanan tambahan */}
+              {/* Layanan tambahan */}
               <TouchableOpacity
-                style={[s.altBtn, showServicePicker && s.altBtnActive]}
-                onPress={() => setShowServicePicker(!showServicePicker)}
+                style={[s.altBtn, showSvcPicker && { backgroundColor: C.purple, borderColor: C.purple }]}
+                onPress={() => setShowSvcPicker(v => !v)}
               >
-                <Ionicons name="list" size={16} color={showServicePicker ? '#fff' : '#7C3AED'} />
-                <Text style={[s.altBtnText, showServicePicker && { color: '#fff' }]}>
-                  {showServicePicker ? 'Tutup' : '+ Paket / Poles / Premium'}
+                <Ionicons name="list" size={16} color={showSvcPicker ? C.white : C.purple} />
+                <Text style={[s.altBtnTxt, showSvcPicker && { color: C.white }]}>
+                  {showSvcPicker ? '✕ Tutup' : '+ Paket / Poles / Premium'}
                 </Text>
               </TouchableOpacity>
 
-              {showServicePicker && (
+              {showSvcPicker && (
                 <View style={s.altList}>
                   {['Premium', 'Paket', 'Poles'].map(kat => (
                     <View key={kat}>
                       <Text style={s.altKatHdr}>{kat.toUpperCase()}</Text>
                       {SERVICES.filter(sv => sv.kategori === kat).map(svc => {
                         const isAct = formServiceId === svc.id;
-                        // Untuk Poles: hitung estimasi TP pakai kategori mobil terpilih
-                        let tpHint = '';
+                        let hint = '';
                         if (svc.isPolesDinamis) {
-                          const kat2 = polesKatMobil || selectedCar.kategori;
-                          const tp = getPendapatanTPPoles(svc, kat2);
-                          tpHint = `TP ~${fmt(tp)} (${KATEGORI_MOBIL_LABEL[kat2]}, hidrolik)`;
-                        } else if (svc.hasTP && svc.upahTP !== undefined) {
-                          tpHint = `TP Rp ${fmt(svc.upahTP)}`;
+                          const rk = polesKat || (selectedCar.kategori as KategoriMobil);
+                          hint = `TP ~${fmt(getPendapatanTPPoles(svc, rk))}`;
+                        } else if (svc.hasTP && svc.upahTP) {
+                          hint = `TP Rp ${fmt(svc.upahTP)}`;
                         }
                         return (
                           <TouchableOpacity
                             key={svc.id}
-                            style={[s.altRow, isAct && s.altRowActive]}
+                            style={[s.altRow, isAct && s.altRowAct]}
                             onPress={() => applyManualService(svc)}
                           >
-                            <View style={[s.radioDot, isAct && s.radioDotActive]}>
-                              {isAct && <View style={s.radioDotInner} />}
+                            <View style={[s.radio, isAct && s.radioAct]}>
+                              {isAct && <View style={s.radioInner} />}
                             </View>
                             <View style={{ flex: 1 }}>
-                              <Text style={[s.altName, isAct && s.altNameActive]} numberOfLines={2}>{svc.name}</Text>
-                              {tpHint ? <Text style={s.altTP}>{tpHint}</Text> : null}
+                              <Text style={[s.altName, isAct && { color: C.orange, fontWeight: '700' }]} numberOfLines={2}>
+                                {svc.name}
+                              </Text>
+                              {hint ? <Text style={s.altHint}>{hint}</Text> : null}
                             </View>
-                            <Text style={[s.altPrice, isAct && { color: '#059669' }]}>Rp {fmt(svc.harga as number)}</Text>
+                            <Text style={[s.altPrice, isAct && { color: C.orange }]}>Rp {fmt(svc.harga as number)}</Text>
                           </TouchableOpacity>
                         );
                       })}
                     </View>
                   ))}
-
-                  {/* Poles: pilih kategori mobil (jenis cuci sudah pasti HIDROLIK) */}
                   {isPoles && (
-                    <View style={s.polesKatBox}>
-                      <Text style={s.polesKatTitle}>🔧 Poles selalu HIDROLIK · Pilih Kategori Mobil:</Text>
+                    <View style={s.polesBox}>
+                      <Text style={s.polesTitle}>Poles selalu HIDROLIK · Pilih Kategori:</Text>
                       <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                        {KAT_MOBIL_OPTIONS.map(o => {
-                          const upahCuci = WASHER_UPAH[o.value]['hidrolik'];
-                          const tp = formSelectedService
-                            ? getPendapatanTPPoles(formSelectedService, o.value)
-                            : 0;
-                          const isAct = polesKatMobil === o.value;
+                        {KAT_OPTIONS.map(o => {
+                          const tp = formSelectedSvc ? getPendapatanTPPoles(formSelectedSvc, o.value as KategoriMobil) : 0;
+                          const act = polesKat === o.value;
                           return (
-                            <TouchableOpacity
-                              key={o.value}
-                              style={[s.polesKatBtn, isAct && { backgroundColor: o.color, borderColor: o.color }]}
-                              onPress={() => {
-                                setPolesKatMobil(o.value);
-                                if (formSelectedService) applyManualService(formSelectedService, o.value);
-                              }}
+                            <TouchableOpacity key={o.value}
+                              style={[s.polesKatBtn, act && { backgroundColor: o.color, borderColor: o.color }]}
+                              onPress={() => { setPolesKat(o.value as KategoriMobil); if (formSelectedSvc) applyManualService(formSelectedSvc, o.value as KategoriMobil); }}
                             >
-                              <Text style={[s.polesKatBtnLbl, isAct && { color: '#fff' }]}>{o.label}</Text>
-                              <Text style={[s.polesKatBtnSub, isAct && { color: '#FEF9C3' }]}>
-                                Cuci {fmt(upahCuci)} · TP {fmt(tp)}
-                              </Text>
+                              <Text style={[s.polesKatLbl, act && { color: C.white }]}>{o.label}</Text>
+                              <Text style={[s.polesKatSub, act && { color: '#FEF9C3' }]}>TP {fmt(tp)}</Text>
                             </TouchableOpacity>
                           );
                         })}
@@ -597,209 +638,231 @@ export default function AntrianScreen() {
                 </View>
               )}
 
-              {/* Detail card */}
+              {/* Service card */}
               <View style={s.svcCard}>
-                <SvcCardRow label="Model" right={
-                  <View style={[s.katBadgeLg, { backgroundColor: getKatColor(selectedCar.kategori) }]}>
-                    <Text style={s.katBadgeLgText}>{selectedCar.model} · {KATEGORI_MOBIL_LABEL[selectedCar.kategori]}</Text>
-                  </View>
-                } />
-                <SvcCardRow label="Layanan" rightText={formServiceName} />
-                <View style={s.svcCardDiv} />
-                <SvcCardRow label="Harga" rightText={`Rp ${fmt(formHarga)}`} rightColor="#E85D04" large />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={s.svcCardLabel}>Layanan</Text>
+                  <Text style={s.svcCardVal} numberOfLines={2}>{formServiceName}</Text>
+                </View>
+                <View style={s.svcDiv} />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={s.svcCardLabel}>Harga</Text>
+                  <Text style={s.svcCardPrice}>Rp {fmt(formHarga)}</Text>
+                </View>
                 {formUpahWasher > 0 && (
-                  <SvcCardRow label="Upah Washer (Hidrolik)" rightText={`Rp ${fmt(formUpahWasher)}`} rightColor="#059669" />
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                    <Text style={s.svcCardLabel}>Upah Washer</Text>
+                    <Text style={[s.svcCardVal, { color: C.green }]}>Rp {fmt(formUpahWasher)}</Text>
+                  </View>
                 )}
                 {needsTP && (
-                  <SvcCardRow label="Pendapatan TP" rightText={`Rp ${fmt(formPendapatanTP)}`} rightColor="#A78BFA" />
-                )}
-                {isPoles && formSelectedService && (
-                  <View style={s.formulaBox}>
-                    <Text style={s.formulaText}>
-                      {fmt(formHarga)} − {fmt(formSelectedService.kasDefault || 0)} (KAS) − {fmt(formUpahWasher)} (cuci) = Rp {fmt(formPendapatanTP)}
-                    </Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                    <Text style={s.svcCardLabel}>Upah TP</Text>
+                    <Text style={[s.svcCardVal, { color: C.purple }]}>Rp {fmt(formPendapatanTP)}</Text>
                   </View>
                 )}
               </View>
 
-              <TouchableOpacity style={s.nextBtn} onPress={() => setStep('washer')}>
-                <Text style={s.nextBtnText}>Lanjut →</Text>
+              <TouchableOpacity style={s.bigBtn} onPress={() => setStep('washer')}>
+                <Text style={s.bigBtnTxt}>Lanjut →</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
 
-          {/* ── STEP 4: WASHER & TP ── */}
+          {/* ── STEP 4: WASHER & FREE ── */}
           {step === 'washer' && (
             <ScrollView contentContainerStyle={{ padding: 16 }}>
-              <Text style={s.stepLbl}>Nama Washer</Text>
-              <View style={s.chipGrid}>
-                {washerList.map((w: string) => (
-                  <TouchableOpacity
-                    key={w}
-                    style={[s.chip, formWasher === w && !showCustomWasher && s.chipActive]}
-                    onPress={() => { setFormWasher(w); setShowCustomWasher(false); }}
-                  >
-                    <Text style={[s.chipText, formWasher === w && !showCustomWasher && s.chipTextActive]}>{w}</Text>
-                  </TouchableOpacity>
-                ))}
-                <TouchableOpacity
-                  style={[s.chip, showCustomWasher && s.chipActive]}
-                  onPress={() => { setShowCustomWasher(true); setFormWasher(''); }}
-                >
-                  <Text style={[s.chipText, showCustomWasher && s.chipTextActive]}>+ Lainnya</Text>
-                </TouchableOpacity>
-              </View>
-              {showCustomWasher && (
-                <TextInput style={s.textInput} placeholder="Nama washer..."
-                  value={customWasher} onChangeText={setCustomWasher} autoFocus placeholderTextColor="#9CA3AF" />
-              )}
 
-              {/* TP section */}
-              {needsTP && (
-                <>
-                  <View style={s.tpHdr}>
-                    <View style={[s.tpHdrDot]} />
-                    <Text style={s.tpHdrTitle}>Nama TP (Tenaga Premium)</Text>
-                    <View style={s.tpHdrBadge}>
-                      <Text style={s.tpHdrBadgeText}>Rp {fmt(formPendapatanTP)}</Text>
-                    </View>
-                  </View>
-                  <View style={s.chipGrid}>
-                    {tpList.map((w: string) => (
-                      <TouchableOpacity
-                        key={w}
-                        style={[s.chip, s.chipTP, formTPName === w && !showCustomTP && s.chipTPActive]}
-                        onPress={() => { setFormTPName(w); setShowCustomTP(false); }}
-                      >
-                        <Text style={[s.chipText, formTPName === w && !showCustomTP && s.chipTPActiveText]}>{w}</Text>
-                      </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity
-                      style={[s.chip, s.chipTP, showCustomTP && s.chipTPActive]}
-                      onPress={() => { setShowCustomTP(true); setFormTPName(''); }}
-                    >
-                      <Text style={[s.chipText, showCustomTP && s.chipTPActiveText]}>+ Lainnya</Text>
-                    </TouchableOpacity>
-                  </View>
-                  {showCustomTP && (
-                    <TextInput style={[s.textInput, { borderColor: '#7C3AED' }]}
-                      placeholder="Nama TP..." value={customTPName} onChangeText={setCustomTPName}
-                      autoFocus placeholderTextColor="#9CA3AF" />
-                  )}
-                </>
-              )}
-
-              {/* Toggle FREE / Gratis */}
+              {/* ======= TOGGLE FREE ======= */}
               <TouchableOpacity
-                style={[s.freeToggle, formIsFree && s.freeToggleActive]}
+                style={[s.freeToggle, formIsFree && s.freeToggleOn]}
                 onPress={() => setFormIsFree(v => !v)}
+                activeOpacity={0.8}
               >
-                <Ionicons name={formIsFree ? 'gift' : 'gift-outline'} size={20} color={formIsFree ? '#fff' : '#DC2626'} />
+                <View style={[s.freeIconBox, formIsFree && { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
+                  <Ionicons name="gift" size={22} color={formIsFree ? C.white : C.red} />
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[s.freeToggleTxt, formIsFree && { color: '#fff' }]}>
-                    {formIsFree ? '✓ CUCI FREE / GRATIS' : 'Tandai sebagai Cuci FREE'}
+                  <Text style={[s.freeTitle, formIsFree && { color: C.white }]}>
+                    {formIsFree ? '🎁 CUCI FREE / GRATIS' : 'Tandai sebagai Cuci Free'}
                   </Text>
-                  <Text style={[s.freeToggleSub, formIsFree && { color: '#FCA5A5' }]}>
+                  <Text style={[s.freeSub, formIsFree && { color: '#FECACA' }]}>
                     {formIsFree
-                      ? 'Tidak masuk closing, tercatat sebagai pengeluaran'
-                      : 'Untuk karyawan, keluarga, atau pelanggan spesial'}
+                      ? 'Tidak masuk closing · Tercatat sebagai pengeluaran otomatis'
+                      : 'Untuk karyawan, keluarga, atau tamu khusus'}
                   </Text>
                 </View>
-                <View style={[s.freeCheckbox, formIsFree && s.freeCheckboxActive]}>
-                  {formIsFree && <Ionicons name="checkmark" size={14} color="#fff" />}
+                <View style={[s.freeSwitch, formIsFree && s.freeSwitchOn]}>
+                  <View style={[s.freeSwitchThumb, formIsFree && s.freeSwitchThumbOn]} />
                 </View>
               </TouchableOpacity>
 
-              <Text style={[s.stepLbl, { marginTop: 14 }]}>Keterangan (Opsional)</Text>
-              <TextInput style={[s.textInput, { height: 65 }]} placeholder="Catatan tambahan..."
-                value={formKet} onChangeText={setFormKet} multiline placeholderTextColor="#9CA3AF" />
+              {/* Nama Washer */}
+              <Text style={s.stepLabel}>Nama Washer</Text>
+              {washerList.length === 0 ? (
+                <View style={s.emptyKarBox}>
+                  <Ionicons name="person-outline" size={24} color={C.grayB} />
+                  <Text style={s.emptyKarTxt}>Belum ada washer. Tambahkan di Pengaturan → Karyawan</Text>
+                </View>
+              ) : (
+                <View style={s.chipWrap}>
+                  {washerList.map(w => (
+                    <TouchableOpacity key={w.id}
+                      style={[s.chip, formWasher === w.nama && s.chipActive]}
+                      onPress={() => setFormWasher(w.nama)}
+                    >
+                      <Text style={[s.chipTxt, formWasher === w.nama && s.chipTxtActive]}>{w.nama}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {/* Juga bisa tulis manual */}
+              <TextInput style={s.inputField}
+                placeholder="Atau ketik nama washer..."
+                value={formWasher}
+                onChangeText={setFormWasher}
+                placeholderTextColor={C.gray}
+              />
+
+              {/* Nama TP */}
+              {needsTP && !formIsFree && (
+                <>
+                  <View style={s.tpSeparator}>
+                    <View style={s.tpSepLine} />
+                    <View style={s.tpSepBadge}>
+                      <Ionicons name="star" size={12} color={C.white} />
+                      <Text style={s.tpSepTxt}>TEAM POLISHER</Text>
+                    </View>
+                    <View style={s.tpSepLine} />
+                  </View>
+                  <Text style={s.stepLabel}>Nama TP <Text style={{ color: C.purple }}>Rp {fmt(formPendapatanTP)}</Text></Text>
+                  {tpList.length === 0 ? (
+                    <View style={s.emptyKarBox}>
+                      <Text style={s.emptyKarTxt}>Belum ada TP. Tambahkan di Pengaturan → Karyawan</Text>
+                    </View>
+                  ) : (
+                    <View style={s.chipWrap}>
+                      {tpList.map(t => (
+                        <TouchableOpacity key={t.id}
+                          style={[s.chip, s.chipTP, formTPName === t.nama && s.chipTPActive]}
+                          onPress={() => setFormTPName(t.nama)}
+                        >
+                          <Text style={[s.chipTxt, formTPName === t.nama && { color: C.white }]}>{t.nama}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                  <TextInput style={[s.inputField, { borderColor: C.purple }]}
+                    placeholder="Atau ketik nama TP..."
+                    value={formTPName}
+                    onChangeText={setFormTPName}
+                    placeholderTextColor={C.gray}
+                  />
+                </>
+              )}
+
+              {/* Keterangan */}
+              <Text style={s.stepLabel}>Keterangan (Opsional)</Text>
+              <TextInput style={[s.inputField, { height: 60 }]}
+                placeholder="Catatan tambahan..."
+                value={formKet} onChangeText={setFormKet}
+                multiline placeholderTextColor={C.gray}
+              />
 
               {/* Ringkasan */}
               <View style={s.summary}>
-                <Text style={s.summaryTitle}>RINGKASAN</Text>
-                <SumRow label="Nopol"   value={formNopol} />
-                <SumRow label="Model"   value={`${selectedCar?.model} (${KATEGORI_MOBIL_LABEL[selectedCar?.kategori || 'umum']})`} />
-                <SumRow label="Layanan" value={formServiceName} />
+                <Text style={s.summaryTitle}>RINGKASAN ORDER</Text>
+                <SRow label="Nopol"   val={formNopol} />
+                <SRow label="Model"   val={`${selectedCar?.nama} (${KAT_OPTIONS.find(o => o.value === selectedCar?.kategori)?.label || ''})`} />
+                <SRow label="Layanan" val={formServiceName} />
+                <SRow label="Washer"  val={formWasher || '-'} />
                 <View style={s.summaryDiv} />
                 {formIsFree
-                  ? <SumRow label="Harga" value="FREE / GRATIS" color="#DC2626" />
+                  ? <SRow label="Harga" val="🎁 FREE / GRATIS" vc={C.red} bold />
                   : <>
-                      <SumRow label="Harga" value={`Rp ${fmt(formHarga)}`} color="#E85D04" />
-                      {formUpahWasher > 0 && <SumRow label="Upah Washer" value={`Rp ${fmt(formUpahWasher)}`} color="#059669" />}
-                      {needsTP && <SumRow label="Pendapatan TP" value={`Rp ${fmt(formPendapatanTP)}`} color="#A78BFA" />}
+                      <SRow label="Harga"        val={`Rp ${fmt(formHarga)}`}        vc={C.orange} bold />
+                      {formUpahWasher > 0 && <SRow label="Upah Washer" val={`Rp ${fmt(formUpahWasher)}`} vc={C.green} />}
+                      {needsTP && <SRow label="Upah TP" val={`Rp ${fmt(formPendapatanTP)}`} vc={C.purple} />}
                     </>
                 }
               </View>
 
               <TouchableOpacity
                 style={[s.saveBtn, addMutation.isPending && s.saveBtnDis]}
-                onPress={() => addMutation.mutate()} disabled={addMutation.isPending}
+                onPress={() => addMutation.mutate()}
+                disabled={addMutation.isPending}
               >
-                <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                <Text style={s.saveBtnText}>{addMutation.isPending ? 'Menyimpan...' : 'SIMPAN ANTRIAN'}</Text>
+                <Ionicons name="checkmark-circle" size={20} color={C.white} />
+                <Text style={s.saveBtnTxt}>
+                  {addMutation.isPending ? 'Menyimpan...' : 'SIMPAN ANTRIAN'}
+                </Text>
               </TouchableOpacity>
             </ScrollView>
           )}
         </SafeAreaView>
       </Modal>
 
-      {/* ========== DETAIL MODAL ========== */}
+      {/* ════════════════ DETAIL MODAL ════════════════ */}
       {selectedItem && (
         <Modal visible animationType="fade" transparent onRequestClose={() => setSelectedItem(null)}>
           <View style={s.detailOverlay}>
             <View style={s.detailBox}>
+              {Number((selectedItem as any).isFree) > 0 && (
+                <View style={s.freeBanner}>
+                  <Ionicons name="gift" size={14} color={C.white} />
+                  <Text style={s.freeBannerTxt}>CUCI FREE / GRATIS</Text>
+                </View>
+              )}
               <View style={s.detailPlate}>
-                <Text style={s.detailPlateText}>{selectedItem.nopol}</Text>
+                <Text style={s.detailPlateTxt}>{selectedItem.nopol}</Text>
               </View>
               {(selectedItem as any).modelMobil && (
-                <View style={[s.katBadgeLg, { alignSelf: 'center', marginTop: 6, backgroundColor: getKatColor((selectedItem as any).kategoriMobil) }]}>
-                  <Text style={s.katBadgeLgText}>{(selectedItem as any).modelMobil} · {selectedItem.jenis}</Text>
+                <View style={[s.katBadgeSm, { alignSelf: 'center', marginTop: 6, backgroundColor: getKatColor((selectedItem as any).kategoriMobil) + '20' }]}>
+                  <Text style={[s.katBadgeSmTxt, { color: getKatColor((selectedItem as any).kategoriMobil) }]}>
+                    {(selectedItem as any).modelMobil} · {selectedItem.jenis}
+                  </Text>
                 </View>
               )}
-              {Number((selectedItem as any).isFree) > 0 && (
-                <View style={s.detailFreeBadge}>
-                  <Ionicons name="gift" size={13} color="#fff" />
-                  <Text style={s.detailFreeBadgeText}>CUCI FREE / GRATIS</Text>
-                </View>
-              )}
-              <Text style={s.detailNo}>No. {selectedItem.nomor}</Text>
+              <Text style={s.detailNo}>No. Antrian {selectedItem.nomor}</Text>
               <View style={s.detailDiv} />
-              <DR label="Layanan" value={selectedItem.serviceName} />
-              {Number((selectedItem as any).isFree) > 0
-                ? <DR label="Harga" value="FREE / GRATIS" vc="#DC2626" />
-                : <DR label="Harga" value={`Rp ${fmt(selectedItem.harga)}`} vc="#E85D04" />
-              }
-              {(selectedItem as any).upahWasher > 0 && (
-                <DR label="Upah Washer" value={`Rp ${fmt((selectedItem as any).upahWasher)}`} vc="#059669" />
+              <DR label="Layanan" val={selectedItem.serviceName} />
+              <DR label="Harga"   val={Number((selectedItem as any).isFree) > 0 ? 'FREE' : `Rp ${fmt(selectedItem.harga)}`}
+                  vc={Number((selectedItem as any).isFree) > 0 ? C.red : C.orange} />
+              {!Number((selectedItem as any).isFree) && (selectedItem as any).upahWasher > 0 && (
+                <DR label="Upah Washer" val={`Rp ${fmt((selectedItem as any).upahWasher)}`} vc={C.green} />
               )}
-              {(selectedItem as any).pendapatanTP > 0 && (
-                <DR label={`Pendapatan TP (${(selectedItem as any).namaTP || '-'})`}
-                  value={`Rp ${fmt((selectedItem as any).pendapatanTP)}`} vc="#7C3AED" />
+              {!Number((selectedItem as any).isFree) && (selectedItem as any).pendapatanTP > 0 && (
+                <DR label={`Upah TP (${(selectedItem as any).namaTP})`}
+                    val={`Rp ${fmt((selectedItem as any).pendapatanTP)}`} vc={C.purple} />
               )}
-              <DR label="Washer" value={selectedItem.namaWasher} />
-              {selectedItem.ket ? <DR label="Ket" value={selectedItem.ket} /> : null}
+              <DR label="Washer" val={selectedItem.namaWasher} />
+              {selectedItem.ket ? <DR label="Ket" val={selectedItem.ket} /> : null}
               <View style={s.detailDiv} />
               <Text style={s.detailStatusTitle}>Update Status</Text>
-              <View style={s.detailStatusRow}>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
                 {(['antri', 'proses', 'selesai'] as string[]).map(st => (
-                  <TouchableOpacity
-                    key={st}
-                    style={[s.detailStatusBtn, selectedItem.status === st && s.detailStatusBtnActive]}
-                    onPress={() => { updateStatusMutation.mutate({ id: selectedItem.id, status: st }); setSelectedItem({ ...selectedItem, status: st }); }}
+                  <TouchableOpacity key={st}
+                    style={[s.statusBtn, selectedItem.status === st && s.statusBtnActive]}
+                    onPress={() => { statusMutation.mutate({ id: selectedItem.id, status: st }); setSelectedItem({ ...selectedItem, status: st }); }}
                   >
-                    <Text style={[s.detailStatusBtnText, selectedItem.status === st && s.detailStatusBtnTextActive]}>
+                    <Text style={[s.statusBtnTxt, selectedItem.status === st && s.statusBtnTxtActive]}>
                       {st === 'antri' ? '⏳ Antri' : st === 'proses' ? '🔧 Proses' : '✅ Selesai'}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              <View style={s.detailActRow}>
-                <TouchableOpacity style={s.detailDelBtn} onPress={() => handleDeleteConfirm(selectedItem)}>
-                  <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                  <Text style={s.detailDelText}>Hapus</Text>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity style={s.delBtn}
+                  onPress={() => Alert.alert('Hapus', `Hapus ${selectedItem.nopol}?`, [
+                    { text: 'Batal', style: 'cancel' },
+                    { text: 'Hapus', style: 'destructive', onPress: () => deleteMutation.mutate(selectedItem.id) },
+                  ])}
+                >
+                  <Ionicons name="trash-outline" size={16} color={C.red} />
+                  <Text style={s.delBtnTxt}>Hapus</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={s.detailCloseBtn} onPress={() => setSelectedItem(null)}>
-                  <Text style={s.detailCloseBtnText}>Tutup</Text>
+                <TouchableOpacity style={s.closeBtn} onPress={() => setSelectedItem(null)}>
+                  <Text style={s.closeBtnTxt}>Tutup</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -810,194 +873,209 @@ export default function AntrianScreen() {
   );
 }
 
-// ── Small helpers ──
-function StatItem({ value, label, color, small }: { value: any; label: string; color?: string; small?: boolean }) {
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function StatCard({ label, value, icon, color, small }: { label: string; value: any; icon: string; color: string; small?: boolean }) {
   return (
-    <View style={s.statItem}>
-      <Text style={[s.statNum, color && { color }, small && { fontSize: 11 }]}>{value}</Text>
+    <View style={s.statCard}>
+      <Ionicons name={icon as any} size={14} color={color} />
+      <Text style={[s.statVal, { color, fontSize: small ? 11 : 14 }]}>{value}</Text>
       <Text style={s.statLbl}>{label}</Text>
     </View>
   );
 }
-function SvcCardRow({ label, right, rightText, rightColor, large }: { label: string; right?: React.ReactNode; rightText?: string; rightColor?: string; large?: boolean }) {
+function SRow({ label, val, vc, bold }: { label: string; val: string; vc?: string; bold?: boolean }) {
   return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7 }}>
-      <Text style={{ fontSize: 12, color: '#9CA3AF' }}>{label}</Text>
-      {right || <Text style={{ fontSize: large ? 17 : 12, fontWeight: large ? '900' : '600', color: rightColor || '#E5E7EB', maxWidth: '65%', textAlign: 'right' }}>{rightText}</Text>}
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+      <Text style={{ fontSize: 11, color: '#9CA3AF' }}>{label}</Text>
+      <Text style={{ fontSize: bold ? 13 : 11, fontWeight: bold ? '800' : '600', color: vc || '#E5E7EB', maxWidth: '65%', textAlign: 'right' }}>{val}</Text>
     </View>
   );
 }
-function DR({ label, value, vc }: { label: string; value: string; vc?: string }) {
+function DR({ label, val, vc }: { label: string; val: string; vc?: string }) {
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
-      <Text style={{ fontSize: 13, color: '#6B7280', flex: 1 }}>{label}</Text>
-      <Text style={{ fontSize: 13, fontWeight: '600', color: vc || '#1F2937', maxWidth: '55%', textAlign: 'right' }}>{value}</Text>
-    </View>
-  );
-}
-function SumRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
-      <Text style={{ fontSize: 11, color: '#9CA3AF' }}>{label}</Text>
-      <Text style={{ fontSize: 11, fontWeight: '600', color: color || '#E5E7EB', maxWidth: '65%', textAlign: 'right' }}>{value}</Text>
+      <Text style={{ fontSize: 13, color: C.gray, flex: 1 }}>{label}</Text>
+      <Text style={{ fontSize: 13, fontWeight: '600', color: vc || C.dark, maxWidth: '55%', textAlign: 'right' }}>{val}</Text>
     </View>
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F9FAFB' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#E85D04', paddingHorizontal: 16, paddingVertical: 12 },
-  headerTitle: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
-  headerSub: { color: '#FED7AA', fontSize: 11, marginTop: 1 },
-  headerRight: { flexDirection: 'column', alignItems: 'flex-end', gap: 4 },
-  kasirBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-  kasirBadgeText: { color: '#FED7AA', fontSize: 10, fontWeight: '700' },
-  addBtn: { flexDirection: 'row', gap: 6, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, alignItems: 'center' },
-  addBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  statsBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB', paddingVertical: 8 },
-  statItem: { flex: 1, alignItems: 'center' },
-  statNum: { fontSize: 14, fontWeight: '900', color: '#1F2937' },
-  statLbl: { fontSize: 9, color: '#9CA3AF', marginTop: 1 },
-  statDiv: { width: 1, backgroundColor: '#E5E7EB', marginVertical: 4 },
-  tableHead: { flexDirection: 'row', backgroundColor: '#1F2937', paddingHorizontal: 10, paddingVertical: 7, alignItems: 'center' },
-  th: { fontSize: 9, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5 },
-  tableRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', backgroundColor: '#fff' },
-  tableRowDone: { backgroundColor: '#F0FDF4' },
-  tdNo: { width: 26, fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
-  tdBold: { fontSize: 12, fontWeight: '800', color: '#1F2937' },
-  tdSvc: { fontSize: 11, color: '#6B7280', marginTop: 1 },
-  tdSub: { fontSize: 10, color: '#9CA3AF', marginTop: 1 },
-  tdTP: { fontSize: 9, color: '#7C3AED', fontWeight: '600', marginTop: 1 },
-  tdDone: { color: '#9CA3AF', textDecorationLine: 'line-through' },
-  tdPrice: { width: 56, fontSize: 11, fontWeight: '700', color: '#059669', textAlign: 'right' },
-  tdPriceFree: { color: '#DC2626' },
-  tdUpah: { fontSize: 10, fontWeight: '700', color: '#059669' },
-  tdTPVal: { fontSize: 9, fontWeight: '700', color: '#7C3AED' },
-  katBadge: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
-  katBadgeText: { fontSize: 10, fontWeight: '700', color: '#fff' },
-  freeBadge: { backgroundColor: '#DC2626', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, alignSelf: 'flex-start', marginTop: 2 },
-  freeBadgeText: { fontSize: 8, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
-  statusPill: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 20 },
-  statusPillText: { fontSize: 8, fontWeight: '800', color: '#fff' },
-  emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#374151', marginTop: 16 },
-  emptyText: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', marginTop: 6 },
-  emptyAddBtn: { flexDirection: 'row', gap: 8, backgroundColor: '#E85D04', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12, marginTop: 20, alignItems: 'center' },
-  emptyAddText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  modalSafe: { flex: 1, backgroundColor: '#F9FAFB' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#E85D04', paddingHorizontal: 16, paddingVertical: 14 },
-  modalTitle: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  modalSub: { color: '#FED7AA', fontSize: 11, marginTop: 2 },
-  stepRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  stepItem: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  stepDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#E5E7EB' },
-  stepDotActive: { borderColor: '#E85D04', backgroundColor: '#E85D04' },
-  stepDotDone: { borderColor: '#10B981', backgroundColor: '#10B981' },
-  stepDotText: { fontSize: 11, fontWeight: '700', color: '#9CA3AF' },
-  stepDotTextActive: { color: '#fff' },
-  stepLine: { flex: 1, height: 2, backgroundColor: '#E5E7EB', marginHorizontal: 3 },
-  stepLineDone: { backgroundColor: '#10B981' },
-  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', margin: 12, borderRadius: 12, padding: 12, borderWidth: 1.5, borderColor: '#E5E7EB' },
-  searchInput: { flex: 1, fontSize: 14, color: '#1F2937' },
-  legendRow: { flexDirection: 'row', paddingHorizontal: 12, paddingBottom: 8, gap: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 10, color: '#6B7280' },
-  carItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F9FAFB', backgroundColor: '#fff' },
-  carItemSel: { backgroundColor: '#FFF7ED' },
-  carKatDot: { width: 8, height: 8, borderRadius: 4 },
-  carModel: { flex: 1, fontSize: 14, color: '#374151', fontWeight: '500' },
-  carModelSel: { color: '#E85D04', fontWeight: '700' },
-  carKatLbl: { fontSize: 10, fontWeight: '600' },
-  carSelBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1F2937', padding: 14, paddingHorizontal: 16, gap: 12 },
-  carSelName: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  carSelKat: { color: '#9CA3AF', fontSize: 11, marginTop: 2 },
-  nextBtnSm: { backgroundColor: '#E85D04', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
-  nextBtnSmText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  stepLbl: { fontSize: 14, fontWeight: '700', color: '#1F2937', marginBottom: 12 },
-  nopolPreview: { alignItems: 'center', marginBottom: 20 },
-  nopolPlate: { backgroundColor: '#F59E0B', paddingHorizontal: 32, paddingVertical: 12, borderRadius: 8, borderWidth: 3, borderColor: '#1F2937' },
-  nopolPlateText: { fontSize: 26, fontWeight: '900', color: '#1F2937', letterSpacing: 4 },
-  nopolCarInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  nopolHint: { fontSize: 12, color: '#6B7280' },
-  nopolInput: { backgroundColor: '#fff', borderWidth: 2, borderColor: '#E85D04', borderRadius: 12, padding: 14, fontSize: 22, fontWeight: '800', textAlign: 'center', color: '#1F2937', letterSpacing: 4, marginBottom: 20 },
-  cuciToggle: { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  cuciBtn: { flex: 1, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12, borderWidth: 2, borderColor: '#E5E7EB', backgroundColor: '#fff' },
-  cuciBtnActive: { borderColor: '#E85D04', backgroundColor: '#FFF7ED' },
-  cuciIcon: { fontSize: 18 },
-  cuciBtnText: { fontSize: 14, fontWeight: '700', color: '#9CA3AF' },
-  cuciBtnTextActive: { color: '#E85D04' },
-  altBtn: { flexDirection: 'row', gap: 8, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1.5, borderColor: '#7C3AED', marginBottom: 10 },
-  altBtnActive: { backgroundColor: '#7C3AED' },
-  altBtnText: { fontSize: 13, fontWeight: '700', color: '#7C3AED' },
-  altList: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#E5E7EB' },
-  altKatHdr: { fontSize: 10, fontWeight: '800', color: '#fff', backgroundColor: '#374151', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, alignSelf: 'flex-start', marginBottom: 6, marginTop: 8, letterSpacing: 0.5 },
-  altRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 8, borderRadius: 8, marginBottom: 2, borderWidth: 1, borderColor: '#F3F4F6' },
-  altRowActive: { borderColor: '#E85D04', backgroundColor: '#FFF7ED' },
-  radioDot: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center' },
-  radioDotActive: { borderColor: '#E85D04' },
-  radioDotInner: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#E85D04' },
-  altName: { fontSize: 11, color: '#374151', fontWeight: '500' },
-  altNameActive: { color: '#E85D04', fontWeight: '700' },
-  altTP: { fontSize: 10, color: '#7C3AED', marginTop: 1 },
-  altPrice: { fontSize: 11, fontWeight: '700', color: '#9CA3AF' },
-  polesKatBox: { backgroundColor: '#F5F3FF', borderRadius: 10, padding: 12, marginTop: 8 },
-  polesKatTitle: { fontSize: 11, fontWeight: '700', color: '#5B21B6' },
-  polesKatBtn: { flex: 1, padding: 8, borderRadius: 8, borderWidth: 1.5, borderColor: '#DDD6FE', alignItems: 'center' },
-  polesKatBtnLbl: { fontSize: 11, fontWeight: '700', color: '#374151' },
-  polesKatBtnSub: { fontSize: 9, color: '#7C3AED', marginTop: 2, textAlign: 'center' },
-  svcCard: { backgroundColor: '#1F2937', borderRadius: 14, padding: 14, marginBottom: 14 },
-  svcCardDiv: { height: 1, backgroundColor: '#374151', marginVertical: 4 },
-  formulaBox: { backgroundColor: '#374151', borderRadius: 6, padding: 8, marginTop: 4 },
-  formulaText: { fontSize: 10, color: '#D1D5DB', textAlign: 'center' },
-  katBadgeLg: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  katBadgeLgText: { fontSize: 12, fontWeight: '700', color: '#fff' },
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
-  chipActive: { backgroundColor: '#E85D04', borderColor: '#E85D04' },
-  chipText: { fontSize: 13, fontWeight: '600', color: '#374151' },
-  chipTextActive: { color: '#fff' },
-  chipTP: { borderColor: '#DDD6FE' },
-  chipTPActive: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
-  chipTPActiveText: { color: '#fff' },
-  tpHdr: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, marginBottom: 10 },
-  tpHdrDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#7C3AED' },
-  tpHdrTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: '#1F2937' },
-  tpHdrBadge: { backgroundColor: '#EDE9FE', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-  tpHdrBadgeText: { fontSize: 11, fontWeight: '800', color: '#7C3AED' },
-  textInput: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 10, padding: 12, fontSize: 15, color: '#1F2937', marginBottom: 4 },
-  freeToggle: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 12, marginTop: 8, borderWidth: 2, borderColor: '#FECACA' },
-  freeToggleActive: { backgroundColor: '#DC2626', borderColor: '#DC2626' },
-  freeToggleTxt: { fontSize: 13, fontWeight: '700', color: '#DC2626' },
-  freeToggleSub: { fontSize: 10, color: '#EF4444', marginTop: 1 },
-  freeCheckbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#DC2626', alignItems: 'center', justifyContent: 'center' },
-  freeCheckboxActive: { backgroundColor: 'rgba(255,255,255,0.3)', borderColor: '#fff' },
-  summary: { backgroundColor: '#1F2937', borderRadius: 12, padding: 14, marginVertical: 14 },
-  summaryTitle: { color: '#fff', fontSize: 11, fontWeight: '800', marginBottom: 10, letterSpacing: 0.5 },
-  summaryDiv: { height: 1, backgroundColor: '#374151', marginVertical: 6 },
-  nextBtn: { backgroundColor: '#E85D04', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
-  nextBtnDis: { backgroundColor: '#FCA97A' },
-  nextBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  saveBtn: { flexDirection: 'row', gap: 8, backgroundColor: '#059669', borderRadius: 12, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
-  saveBtnDis: { backgroundColor: '#6EE7B7' },
-  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
-  detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  detailBox: { backgroundColor: '#fff', borderRadius: 20, padding: 20, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
-  detailPlate: { backgroundColor: '#F59E0B', paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, borderWidth: 3, borderColor: '#1F2937', alignSelf: 'center' },
-  detailPlateText: { fontSize: 22, fontWeight: '900', color: '#1F2937', letterSpacing: 3 },
-  detailNo: { textAlign: 'center', fontSize: 12, color: '#9CA3AF', marginTop: 4, marginBottom: 8 },
-  detailFreeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#DC2626', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4, alignSelf: 'center', marginTop: 4 },
-  detailFreeBadgeText: { fontSize: 11, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
-  detailDiv: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 10 },
-  detailStatusTitle: { fontSize: 11, fontWeight: '700', color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  detailStatusRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  detailStatusBtn: { flex: 1, paddingVertical: 9, borderRadius: 8, borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center' },
-  detailStatusBtnActive: { borderColor: '#E85D04', backgroundColor: '#FFF7ED' },
-  detailStatusBtnText: { fontSize: 11, fontWeight: '600', color: '#9CA3AF' },
-  detailStatusBtnTextActive: { color: '#E85D04' },
-  detailActRow: { flexDirection: 'row', gap: 10 },
-  detailDelBtn: { flexDirection: 'row', gap: 6, flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1.5, borderColor: '#FCA5A5', alignItems: 'center', justifyContent: 'center' },
-  detailDelText: { fontSize: 13, fontWeight: '600', color: '#EF4444' },
-  detailCloseBtn: { flex: 2, paddingVertical: 10, borderRadius: 8, backgroundColor: '#1F2937', alignItems: 'center' },
-  detailCloseBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  safe:        { flex: 1, backgroundColor: C.bg },
+
+  // Header
+  header:      { backgroundColor: C.orange, paddingHorizontal: 16, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle: { color: C.white, fontSize: 18, fontWeight: '900', letterSpacing: 0.5 },
+  headerSub:   { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
+  addBtn:      { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.orangeD, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 22 },
+  addBtnTxt:   { color: C.white, fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+
+  // Stats
+  statsBar:    { flexDirection: 'row', backgroundColor: C.white, borderBottomWidth: 1, borderBottomColor: C.grayB, paddingVertical: 6 },
+  statCard:    { flex: 1, alignItems: 'center', gap: 1, paddingVertical: 4 },
+  statVal:     { fontWeight: '900', fontSize: 14 },
+  statLbl:     { fontSize: 9, color: C.gray, fontWeight: '600' },
+
+  // Table
+  tableHead:   { flexDirection: 'row', backgroundColor: C.dark, paddingHorizontal: 10, paddingVertical: 8 },
+  th:          { fontSize: 9, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5 },
+  row:         { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', backgroundColor: C.white },
+  rowDone:     { backgroundColor: C.greenL },
+  rowFree:     { backgroundColor: '#FFF5F5' },
+  rowNo:       { width: 28, height: 28, borderRadius: 14, backgroundColor: C.grayL, alignItems: 'center', justifyContent: 'center', marginRight: 2 },
+  rowNoTxt:    { fontSize: 11, fontWeight: '800', color: C.slate },
+  rowNopol:    { fontSize: 13, fontWeight: '800', color: C.dark },
+  rowWasher:   { fontSize: 10, color: C.gray, marginTop: 1 },
+  rowSvc:      { fontSize: 11, color: C.gray, marginTop: 2 },
+  rowTP:       { fontSize: 9, color: C.purple, fontWeight: '600', marginTop: 1 },
+  rowPrice:    { width: 58, fontSize: 12, fontWeight: '700', color: C.green, textAlign: 'right' },
+  rowUpah:     { fontSize: 10, fontWeight: '700', color: C.green },
+  rowTPVal:    { fontSize: 9, fontWeight: '700', color: C.purple },
+  modelBadge:  { alignSelf: 'flex-start', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, marginBottom: 2 },
+  modelBadgeTxt:{ fontSize: 9, fontWeight: '700', color: C.white },
+  txtDone:     { color: C.gray, textDecorationLine: 'line-through' },
+  freeBadge:   { width: 48, flexDirection: 'column', alignItems: 'center', gap: 1, backgroundColor: C.red, borderRadius: 8, paddingVertical: 3 },
+  freeBadgeTxt:{ fontSize: 8, fontWeight: '800', color: C.white },
+  statusPill:  { paddingHorizontal: 5, paddingVertical: 3, borderRadius: 16 },
+  statusPillTxt:{ fontSize: 8, fontWeight: '800', color: C.white },
+
+  // Empty
+  centerBox:   { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  emptyTitle:  { fontSize: 18, fontWeight: '700', color: C.slate, marginTop: 14 },
+  emptyTxt:    { fontSize: 13, color: C.gray, textAlign: 'center', marginTop: 6 },
+  emptyAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.orange, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12, marginTop: 20 },
+  emptyAddTxt: { color: C.white, fontSize: 14, fontWeight: '700' },
+
+  // Modal
+  modalSafe:   { flex: 1, backgroundColor: C.bg },
+  modalHeader: { backgroundColor: C.orange, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
+  modalTitle:  { color: C.white, fontSize: 15, fontWeight: '900', letterSpacing: 0.5 },
+  modalSub:    { color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 2 },
+
+  // Step bar
+  stepBar:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 10, backgroundColor: C.white, borderBottomWidth: 1, borderBottomColor: C.grayB },
+  stepItem:    { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  stepDot:     { width: 26, height: 26, borderRadius: 13, backgroundColor: C.grayL, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: C.grayB },
+  stepDotA:    { borderColor: C.orange, backgroundColor: C.orange },
+  stepDotD:    { borderColor: C.green, backgroundColor: C.green },
+  stepDotTxt:  { fontSize: 11, fontWeight: '700', color: C.gray },
+  stepLine:    { flex: 1, height: 2, backgroundColor: C.grayB, marginHorizontal: 2 },
+  stepLineD:   { backgroundColor: C.green },
+
+  // Search
+  searchWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, margin: 12, backgroundColor: C.white, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: C.grayB },
+  searchInput: { flex: 1, fontSize: 14, color: C.dark },
+
+  // Car list
+  carRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F9FAFB', backgroundColor: C.white },
+  carRowSel:   { backgroundColor: C.orangeL },
+  carNama:     { flex: 1, fontSize: 14, color: C.slate, fontWeight: '500' },
+  katDot:      { width: 10, height: 10, borderRadius: 5 },
+  katBadgeSm:  { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
+  katBadgeSmTxt:{ fontSize: 10, fontWeight: '700' },
+  katLegend:   { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8 },
+  katLegendTxt:{ fontSize: 10, fontWeight: '700' },
+
+  bottomBar:   { flexDirection: 'row', alignItems: 'center', backgroundColor: C.dark, paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
+  bottomBarName:{ color: C.white, fontSize: 15, fontWeight: '800', flex: 1 },
+  bottomBarSub:{ color: '#9CA3AF', fontSize: 11 },
+  nextBtn:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.orange, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
+  nextBtnTxt:  { color: C.white, fontSize: 14, fontWeight: '700' },
+
+  // Nopol step
+  stepLabel:   { fontSize: 14, fontWeight: '700', color: C.dark, marginBottom: 12 },
+  platePrev:   { alignItems: 'center', marginBottom: 18 },
+  plate:       { backgroundColor: C.yellow, paddingHorizontal: 28, paddingVertical: 10, borderRadius: 8, borderWidth: 3, borderColor: C.dark },
+  plateTxt:    { fontSize: 26, fontWeight: '900', color: C.dark, letterSpacing: 4 },
+  nopolInput:  { backgroundColor: C.white, borderWidth: 2, borderColor: C.orange, borderRadius: 12, padding: 14, fontSize: 22, fontWeight: '900', textAlign: 'center', color: C.dark, letterSpacing: 4, marginBottom: 20 },
+  bigBtn:      { backgroundColor: C.orange, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
+  bigBtnDis:   { backgroundColor: '#FCA97A' },
+  bigBtnTxt:   { color: C.white, fontSize: 15, fontWeight: '800' },
+
+  // Service step
+  cuciBtn:     { flex: 1, alignItems: 'center', gap: 4, paddingVertical: 14, borderRadius: 14, borderWidth: 2, borderColor: C.grayB, backgroundColor: C.white },
+  cuciBtnTxt:  { fontSize: 13, fontWeight: '600', color: C.gray },
+  cuciBtnPrice:{ fontSize: 11, color: C.gray },
+  altBtn:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1.5, borderColor: C.purple, marginBottom: 10 },
+  altBtnTxt:   { fontSize: 13, fontWeight: '700', color: C.purple, flex: 1 },
+  altList:     { backgroundColor: C.white, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: C.grayB },
+  altKatHdr:   { fontSize: 9, fontWeight: '800', color: C.white, backgroundColor: C.slate, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, alignSelf: 'flex-start', marginTop: 8, marginBottom: 4, letterSpacing: 0.5 },
+  altRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 8, borderRadius: 8, marginBottom: 2, borderWidth: 1, borderColor: '#F3F4F6' },
+  altRowAct:   { borderColor: C.orange, backgroundColor: C.orangeL },
+  radio:       { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: C.grayB },
+  radioAct:    { borderColor: C.orange },
+  radioInner:  { width: 8, height: 8, borderRadius: 4, backgroundColor: C.orange, alignSelf: 'center', marginTop: 2 },
+  altName:     { fontSize: 11, color: C.slate, fontWeight: '500' },
+  altHint:     { fontSize: 10, color: C.purple, marginTop: 1 },
+  altPrice:    { fontSize: 11, fontWeight: '700', color: C.gray },
+  polesBox:    { backgroundColor: C.purpleL, borderRadius: 10, padding: 10, marginTop: 8 },
+  polesTitle:  { fontSize: 11, fontWeight: '700', color: C.purple },
+  polesKatBtn: { flex: 1, alignItems: 'center', padding: 8, borderRadius: 8, borderWidth: 1.5, borderColor: '#DDD6FE' },
+  polesKatLbl: { fontSize: 10, fontWeight: '700', color: C.slate },
+  polesKatSub: { fontSize: 9, color: C.purple, marginTop: 2 },
+  svcCard:     { backgroundColor: C.dark, borderRadius: 14, padding: 14, marginBottom: 14 },
+  svcCardLabel:{ fontSize: 11, color: '#9CA3AF' },
+  svcCardVal:  { fontSize: 12, fontWeight: '700', color: C.white, maxWidth: '70%', textAlign: 'right' },
+  svcCardPrice:{ fontSize: 18, fontWeight: '900', color: C.orange },
+  svcDiv:      { height: 1, backgroundColor: '#374151', marginVertical: 8 },
+
+  // Step 4 – FREE TOGGLE ──────────────────────────────────────
+  freeToggle:  {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: C.redL, borderRadius: 16, padding: 16, marginBottom: 18,
+    borderWidth: 2, borderColor: '#FECACA',
+  },
+  freeToggleOn:{ backgroundColor: C.red, borderColor: C.red },
+  freeIconBox: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center' },
+  freeTitle:   { fontSize: 14, fontWeight: '800', color: C.red },
+  freeSub:     { fontSize: 10, color: '#EF4444', marginTop: 3, lineHeight: 14 },
+  freeSwitch:  { width: 46, height: 26, borderRadius: 13, backgroundColor: '#FECACA', padding: 2 },
+  freeSwitchOn:{ backgroundColor: 'rgba(255,255,255,0.3)' },
+  freeSwitchThumb:     { width: 22, height: 22, borderRadius: 11, backgroundColor: C.red },
+  freeSwitchThumbOn:   { backgroundColor: C.white, alignSelf: 'flex-end' },
+  // ─────────────────────────────────────────────────────────────
+
+  chipWrap:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  chip:        { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: C.grayL, borderWidth: 1, borderColor: C.grayB },
+  chipActive:  { backgroundColor: C.orange, borderColor: C.orange },
+  chipTxt:     { fontSize: 13, fontWeight: '600', color: C.slate },
+  chipTxtActive:{ color: C.white },
+  chipTP:      { borderColor: '#DDD6FE' },
+  chipTPActive:{ backgroundColor: C.purple, borderColor: C.purple },
+
+  tpSeparator:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 14 },
+  tpSepLine:    { flex: 1, height: 1, backgroundColor: C.grayB },
+  tpSepBadge:   { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.purple, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  tpSepTxt:     { fontSize: 10, fontWeight: '800', color: C.white, letterSpacing: 0.5 },
+
+  inputField:  { borderWidth: 1.5, borderColor: C.grayB, borderRadius: 10, padding: 12, fontSize: 14, color: C.dark, backgroundColor: C.white, marginBottom: 12 },
+  emptyKarBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.grayL, borderRadius: 10, padding: 12, marginBottom: 10 },
+  emptyKarTxt: { fontSize: 12, color: C.gray, flex: 1 },
+
+  summary:     { backgroundColor: C.dark, borderRadius: 14, padding: 14, marginBottom: 14 },
+  summaryTitle:{ color: C.white, fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 },
+  summaryDiv:  { height: 1, backgroundColor: '#374151', marginVertical: 6 },
+  saveBtn:     { flexDirection: 'row', gap: 8, backgroundColor: C.green, borderRadius: 12, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
+  saveBtnDis:  { backgroundColor: '#6EE7B7' },
+  saveBtnTxt:  { color: C.white, fontSize: 15, fontWeight: '800' },
+
+  // Detail modal
+  detailOverlay:{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  detailBox:   { backgroundColor: C.white, borderRadius: 20, padding: 20, width: '100%', maxWidth: 400 },
+  freeBanner:  { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', backgroundColor: C.red, borderRadius: 8, paddingVertical: 5, marginBottom: 10 },
+  freeBannerTxt:{ fontSize: 12, fontWeight: '800', color: C.white, letterSpacing: 0.5 },
+  detailPlate: { backgroundColor: C.yellow, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, borderWidth: 3, borderColor: C.dark, alignSelf: 'center' },
+  detailPlateTxt:{ fontSize: 22, fontWeight: '900', color: C.dark, letterSpacing: 3 },
+  detailNo:    { textAlign: 'center', fontSize: 12, color: C.gray, marginTop: 6, marginBottom: 8 },
+  detailDiv:   { height: 1, backgroundColor: C.grayB, marginVertical: 8 },
+  detailStatusTitle:{ fontSize: 11, fontWeight: '700', color: C.slate, marginBottom: 8, textTransform: 'uppercase' },
+  statusBtn:   { flex: 1, paddingVertical: 9, borderRadius: 8, borderWidth: 1.5, borderColor: C.grayB, alignItems: 'center' },
+  statusBtnActive:{ borderColor: C.orange, backgroundColor: C.orangeL },
+  statusBtnTxt:  { fontSize: 11, fontWeight: '600', color: C.gray },
+  statusBtnTxtActive:{ color: C.orange },
+  delBtn:      { flex: 1, flexDirection: 'row', gap: 6, paddingVertical: 10, borderRadius: 8, borderWidth: 1.5, borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
+  delBtnTxt:   { fontSize: 13, fontWeight: '600', color: C.red },
+  closeBtn:    { flex: 2, paddingVertical: 10, borderRadius: 8, backgroundColor: C.dark, alignItems: 'center' },
+  closeBtnTxt: { fontSize: 14, fontWeight: '700', color: C.white },
 });

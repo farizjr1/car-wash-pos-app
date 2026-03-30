@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, FlatList,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, FlatList, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,18 +8,36 @@ import { useQuery } from '@tanstack/react-query';
 import { blink } from '@/lib/blink';
 import { ClosingReport } from '@/types/closing';
 
-function formatRibuan(n: number): string {
-  return n.toLocaleString('id-ID');
-}
+// ─── Colors ───────────────────────────────────────────────────────────────────
+const C = {
+  orange:  '#E85D04',
+  orangeL: '#FFF3E0',
+  orangeD: '#BF4800',
+  bg:      '#F4F5F7',
+  dark:    '#0F172A',
+  slate:   '#334155',
+  gray:    '#64748B',
+  grayL:   '#E2E8F0',
+  grayBg:  '#F8FAFC',
+  green:   '#059669',
+  greenBg: '#ECFDF5',
+  red:     '#DC2626',
+  redBg:   '#FEF2F2',
+  purple:  '#7C3AED',
+  purpleBg:'#F5F3FF',
+  yellow:  '#D97706',
+  yellowBg:'#FFFBEB',
+  white:   '#FFFFFF',
+  border:  '#E2E8F0',
+};
 
-function formatDate(s: string): string {
-  const d = new Date(s);
-  return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-}
+function fmt(n: number) { return n.toLocaleString('id-ID'); }
 
-function formatDateLong(s: string): string {
-  const d = new Date(s);
-  return d.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+function formatDate(s: string) {
+  return new Date(s).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function formatDateLong(s: string) {
+  return new Date(s).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
 export default function HistoryScreen() {
@@ -28,10 +46,7 @@ export default function HistoryScreen() {
   const { data: reports, isLoading } = useQuery({
     queryKey: ['closing_reports'],
     queryFn: async () => {
-      const res = await blink.db.closingReports.list({
-        orderBy: { createdAt: 'desc' },
-        limit: 50,
-      });
+      const res = await blink.db.closingReports.list({ orderBy: { createdAt: 'desc' }, limit: 50 });
       return res as ClosingReport[];
     },
   });
@@ -45,22 +60,6 @@ export default function HistoryScreen() {
     enabled: !!selectedId,
   });
 
-  // Aggregate pendapatan from selectedItems
-  const selectedTPRekap: Record<string, number> = {};
-  let selPendapatanWasher = 0;
-  let selPendapatanTP = 0;
-  if (selectedItems) {
-    (selectedItems as any[]).forEach((item: any) => {
-      selPendapatanWasher += item.pendapatanWasher || item.pendapatan_washer || 0;
-      selPendapatanTP += item.pendapatanTP || item.pendapatan_tp || 0;
-      const namaTP = item.namaTP || item.nama_tp || '';
-      const pt = item.pendapatanTP || item.pendapatan_tp || 0;
-      if (namaTP && pt > 0) {
-        selectedTPRekap[namaTP] = (selectedTPRekap[namaTP] || 0) + pt;
-      }
-    });
-  }
-
   const { data: selectedPengeluaran } = useQuery({
     queryKey: ['pengeluaran', selectedId],
     queryFn: async () => {
@@ -72,156 +71,187 @@ export default function HistoryScreen() {
 
   const selectedReport = reports?.find(r => r.id === selectedId);
 
-  const totalReports = reports?.length || 0;
-  const totalOmsetAll = reports?.reduce((sum, r) => sum + (r.totalOmset || 0), 0) || 0;
+  // Aggregate dari items
+  const selectedTPRekap: Record<string, number> = {};
+  let selWasher = 0, selTP = 0;
+  if (selectedItems) {
+    (selectedItems as any[]).forEach((it: any) => {
+      selWasher += it.pendapatanWasher || it.pendapatan_washer || 0;
+      selTP     += it.pendapatanTP     || it.pendapatan_tp     || 0;
+      const namaTP = it.namaTP || it.nama_tp || '';
+      const pt     = it.pendapatanTP || it.pendapatan_tp || 0;
+      if (namaTP && pt > 0) selectedTPRekap[namaTP] = (selectedTPRekap[namaTP] || 0) + pt;
+    });
+  }
+
+  const totalAll = reports?.length || 0;
+  const omsetAll = reports?.reduce((s, r) => s + (r.totalOmset || 0), 0) || 0;
+  const closedCount = reports?.filter(r => r.status === 'closed').length || 0;
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>RIWAYAT CLOSING</Text>
-        <Text style={styles.headerSub}>Orange Carwash - Semarang 3</Text>
+    <SafeAreaView style={st.safe} edges={['top']}>
+      {/* Header */}
+      <View style={st.header}>
+        <View>
+          <Text style={st.headerTitle}>RIWAYAT CLOSING</Text>
+          <Text style={st.headerSub}>Rekap harian & laporan kasir</Text>
+        </View>
+        <View style={st.headerIcon}>
+          <Ionicons name="time-outline" size={20} color={C.white} />
+        </View>
       </View>
 
-      {/* Summary Stats */}
-      <View style={styles.statsRow}>
-        <View style={styles.statBox}>
-          <Text style={styles.statVal}>{totalReports}</Text>
-          <Text style={styles.statLabel}>Total Closing</Text>
+      {/* Summary */}
+      <View style={st.summaryRow}>
+        <View style={[st.summaryCard, { backgroundColor: C.dark }]}>
+          <Ionicons name="documents-outline" size={18} color="#94A3B8" />
+          <Text style={st.sumVal}>{totalAll}</Text>
+          <Text style={st.sumLbl}>Total</Text>
         </View>
-        <View style={[styles.statBox, styles.statBoxOrange]}>
-          <Text style={[styles.statVal, { color: '#fff' }]}>Rp {formatRibuan(totalOmsetAll)}</Text>
-          <Text style={[styles.statLabel, { color: '#FED7AA' }]}>Total Omset</Text>
+        <View style={[st.summaryCard, { backgroundColor: C.green }]}>
+          <Ionicons name="checkmark-done-circle-outline" size={18} color="rgba(255,255,255,0.7)" />
+          <Text style={[st.sumVal, { color: C.white }]}>{closedCount}</Text>
+          <Text style={[st.sumLbl, { color: 'rgba(255,255,255,0.75)' }]}>Selesai</Text>
+        </View>
+        <View style={[st.summaryCard, { backgroundColor: C.orange, flex: 2 }]}>
+          <Ionicons name="cash-outline" size={18} color="rgba(255,255,255,0.7)" />
+          <Text style={[st.sumVal, { color: C.white, fontSize: 15 }]}>Rp {fmt(omsetAll)}</Text>
+          <Text style={[st.sumLbl, { color: 'rgba(255,255,255,0.75)' }]}>Total Omset</Text>
         </View>
       </View>
 
       {isLoading ? (
-        <View style={styles.loadingBox}>
-          <Ionicons name="hourglass" size={40} color="#E85D04" />
-          <Text style={styles.loadingText}>Memuat data...</Text>
+        <View style={st.centerBox}>
+          <Ionicons name="hourglass-outline" size={44} color={C.orange} />
+          <Text style={st.emptyTxt}>Memuat data...</Text>
         </View>
       ) : !reports || reports.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Ionicons name="time-outline" size={60} color="#D1D5DB" />
-          <Text style={styles.emptyTitle}>Belum Ada Riwayat</Text>
-          <Text style={styles.emptyDesc}>Closing yang sudah disimpan akan tampil di sini</Text>
+        <View style={st.centerBox}>
+          <Ionicons name="time-outline" size={64} color={C.grayL} />
+          <Text style={st.emptyTitle}>Belum Ada Riwayat</Text>
+          <Text style={st.emptyTxt}>Closing yang sudah disimpan akan tampil di sini</Text>
         </View>
       ) : (
         <FlatList
           data={reports}
-          keyExtractor={(item) => item.id}
+          keyExtractor={item => item.id}
           contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() => setSelectedId(item.id)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.cardTop}>
-                <View style={styles.cardLeft}>
-                  <View style={[styles.statusDot, item.status === 'closed' ? styles.statusClosed : styles.statusOpen]} />
-                  <View>
-                    <Text style={styles.cardDate}>{formatDate(item.tanggal)}</Text>
-                    <Text style={styles.cardKasir}>{item.kasir} · {item.jumlahMobil} kendaraan</Text>
+          renderItem={({ item }) => {
+            const isClosed = item.status === 'closed';
+            return (
+              <TouchableOpacity
+                style={st.card}
+                onPress={() => setSelectedId(item.id)}
+                activeOpacity={0.8}
+              >
+                {/* Card Header */}
+                <View style={st.cardHead}>
+                  <View style={[st.statusDot, { backgroundColor: isClosed ? C.green : C.yellow }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.cardDate}>{formatDate(item.tanggal)}</Text>
+                    <Text style={st.cardMeta}>{item.kasir} · Shift {(item as any).shift || '-'} · {item.jumlahMobil} kendaraan</Text>
+                  </View>
+                  <View style={st.cardRight}>
+                    <Text style={st.cardOmset}>Rp {fmt(item.totalOmset)}</Text>
+                    <View style={[st.statusPill, { backgroundColor: isClosed ? C.greenBg : C.yellowBg }]}>
+                      <Text style={[st.statusPillTxt, { color: isClosed ? C.green : C.yellow }]}>
+                        {isClosed ? 'Selesai' : 'Aktif'}
+                      </Text>
+                    </View>
                   </View>
                 </View>
-                <View style={styles.cardRight}>
-                  <Text style={styles.cardOmset}>Rp {formatRibuan(item.totalOmset)}</Text>
-                  <Text style={[styles.cardStatus, item.status === 'closed' ? styles.statusClosedText : styles.statusOpenText]}>
-                    {item.status === 'closed' ? 'Selesai' : 'Aktif'}
-                  </Text>
-                </View>
-              </View>
-              {item.status === 'closed' && (
-                <View style={styles.cardBottom}>
-                  <View style={styles.cardStat}>
-                    <Text style={styles.cardStatLabel}>Tunai</Text>
-                    <Text style={styles.cardStatVal}>Rp {formatRibuan(item.kasTunai || 0)}</Text>
+
+                {/* Card Stats (only closed) */}
+                {isClosed && (
+                  <View style={st.cardStats}>
+                    <StatChip icon="card-outline" label="Cashless" value={`Rp ${fmt(item.totalCashless || 0)}`} color={C.slate} />
+                    <StatChip icon="cash-outline" label="Tunai" value={`Rp ${fmt(item.kasTunai || 0)}`} color={C.green} />
+                    <StatChip icon="arrow-down-circle-outline" label="Keluar" value={`Rp ${fmt(item.totalOut || 0)}`} color={C.red} />
                   </View>
-                  <View style={styles.cardStat}>
-                    <Text style={styles.cardStatLabel}>Cashless</Text>
-                    <Text style={styles.cardStatVal}>Rp {formatRibuan(item.totalCashless || 0)}</Text>
-                  </View>
-                  <View style={styles.cardStat}>
-                    <Text style={styles.cardStatLabel}>Pengeluaran</Text>
-                    <Text style={[styles.cardStatVal, { color: '#EF4444' }]}>Rp {formatRibuan(item.totalOut || 0)}</Text>
-                  </View>
-                </View>
-              )}
-            </TouchableOpacity>
-          )}
+                )}
+              </TouchableOpacity>
+            );
+          }}
         />
       )}
 
-      {/* Detail Modal */}
+      {/* ── Detail Modal ── */}
       <Modal visible={!!selectedId} animationType="slide" onRequestClose={() => setSelectedId(null)}>
-        <SafeAreaView style={styles.modalSafe}>
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setSelectedId(null)} style={styles.backBtn}>
-              <Ionicons name="arrow-back" size={22} color="#fff" />
+        <SafeAreaView style={st.modalSafe} edges={['top']}>
+          {/* Modal Header */}
+          <View style={st.modalHeader}>
+            <TouchableOpacity onPress={() => setSelectedId(null)} style={st.backBtn}>
+              <Ionicons name="arrow-back" size={22} color={C.white} />
             </TouchableOpacity>
-            <View>
-              <Text style={styles.modalTitle}>Detail Closing</Text>
-              {selectedReport && <Text style={styles.modalSub}>{formatDateLong(selectedReport.tanggal)}</Text>}
+            <View style={{ flex: 1 }}>
+              <Text style={st.modalTitle}>Detail Closing</Text>
+              {selectedReport && (
+                <Text style={st.modalSub}>{formatDateLong(selectedReport.tanggal)}</Text>
+              )}
             </View>
-            <View style={{ width: 38 }} />
+            {selectedReport && (
+              <View style={[st.statusPill, { backgroundColor: selectedReport.status === 'closed' ? C.greenBg : C.yellowBg }]}>
+                <Text style={[st.statusPillTxt, { color: selectedReport.status === 'closed' ? C.green : C.yellow }]}>
+                  {selectedReport.status === 'closed' ? '✓ Selesai' : 'Aktif'}
+                </Text>
+              </View>
+            )}
           </View>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 14, paddingBottom: 48 }}>
             {selectedReport && (
               <>
-                {/* Info */}
-                <View style={styles.detailCard}>
-                  <Text style={styles.detailSectionTitle}>Informasi Closing</Text>
-                  <DetailRow label="Kasir" value={selectedReport.kasir} />
-                  <DetailRow label="Cabang" value={selectedReport.cabang} />
-                  <DetailRow label="Jumlah Kendaraan" value={`${selectedReport.jumlahMobil}`} />
-                  <DetailRow label="Status" value={selectedReport.status === 'closed' ? '✅ Selesai' : '🟡 Aktif'} />
+                {/* Info Dasar */}
+                <View style={st.detCard}>
+                  <Text style={st.detCardTitle}>INFORMASI CLOSING</Text>
+                  <DR label="Kasir"            val={selectedReport.kasir} />
+                  <DR label="Cabang"           val={selectedReport.cabang} />
+                  <DR label="Jumlah Kendaraan" val={`${selectedReport.jumlahMobil} unit`} />
+                  <DR label="Total Omset"      val={`Rp ${fmt(selectedReport.totalOmset)}`} vc={C.orange} bold />
                 </View>
 
-                {/* Layanan */}
-                {selectedItems && selectedItems.length > 0 && (
-                  <View style={styles.detailCard}>
-                    <Text style={styles.detailSectionTitle}>Detail Layanan</Text>
-                    {(selectedItems as any[]).map((item: any, i: number) => {
-                      const namaTP = item.namaTP || item.nama_tp || '';
-                      const pt = item.pendapatanTP || item.pendapatan_tp || 0;
-                      return (
-                        <View key={i} style={styles.itemRow}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.itemName} numberOfLines={2}>{item.serviceName || item.service_name}</Text>
-                            {namaTP ? <Text style={{ fontSize: 10, color: '#7C3AED', marginTop: 1 }}>TP: {namaTP} · +{formatRibuan(pt)}</Text> : null}
-                          </View>
-                          <Text style={styles.itemQty}>x{item.qty}</Text>
-                          <Text style={styles.itemJumlah}>Rp {formatRibuan(item.jumlah)}</Text>
-                        </View>
-                      );
-                    })}
-                    <View style={styles.itemTotal}>
-                      <Text style={styles.itemTotalLabel}>TOTAL OMSET</Text>
-                      <Text style={styles.itemTotalVal}>Rp {formatRibuan(selectedReport.totalOmset)}</Text>
+                {/* Rekap Omset */}
+                <View style={[st.detCard, { backgroundColor: C.dark }]}>
+                  <Text style={[st.detCardTitle, { color: C.white }]}>REKAP AKHIR</Text>
+                  <RR label="Total Omset"      val={`Rp ${fmt(selectedReport.totalOmset)}`}          />
+                  <RR label="Total Pengeluaran" val={`- Rp ${fmt(selectedReport.totalOut || 0)}`}   vc="#FCA5A5" />
+                  <View style={st.detDiv} />
+                  <RR label="Omset Bersih"     val={`Rp ${fmt(selectedReport.totalOmset - (selectedReport.totalOut || 0))}`} vc="#FCD34D" bold />
+                  <View style={st.detDiv} />
+                  <RR label="Total Cashless"   val={`- Rp ${fmt(selectedReport.totalCashless || 0)}`} vc="#94A3B8" />
+                  <View style={[st.highlightRow, { marginTop: 10 }]}>
+                    <View>
+                      <Text style={st.hlLabel}>TUNAI RILL (LOKER)</Text>
+                      <Text style={st.hlSub}>Omset Bersih − Cashless</Text>
                     </View>
+                    <Text style={st.hlVal}>Rp {fmt(selectedReport.kasTunai || 0)}</Text>
                   </View>
-                )}
+                </View>
 
                 {/* Rekap Pendapatan */}
-                {(selPendapatanWasher > 0 || selPendapatanTP > 0) && (
-                  <View style={[styles.detailCard, { backgroundColor: '#1F2937' }]}>
-                    <Text style={[styles.detailSectionTitle, { color: '#fff' }]}>REKAP PENDAPATAN</Text>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
-                      <Text style={{ fontSize: 12, color: '#9CA3AF' }}>💧 Pendapatan Washer</Text>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#34D399' }}>Rp {formatRibuan(selPendapatanWasher)}</Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
-                      <Text style={{ fontSize: 12, color: '#9CA3AF' }}>⭐ Pendapatan TP</Text>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#A78BFA' }}>Rp {formatRibuan(selPendapatanTP)}</Text>
+                {(selWasher > 0 || selTP > 0) && (
+                  <View style={st.detCard}>
+                    <Text style={st.detCardTitle}>REKAP PENDAPATAN KARYAWAN</Text>
+                    <View style={st.pendRow}>
+                      <View style={[st.pendBox, { backgroundColor: C.greenBg }]}>
+                        <Ionicons name="water-outline" size={18} color={C.green} />
+                        <Text style={[st.pendLbl, { color: '#065F46' }]}>Washer</Text>
+                        <Text style={[st.pendVal, { color: C.green }]}>Rp {fmt(selWasher)}</Text>
+                      </View>
+                      <View style={[st.pendBox, { backgroundColor: C.purpleBg }]}>
+                        <Ionicons name="star-outline" size={18} color={C.purple} />
+                        <Text style={[st.pendLbl, { color: '#4C1D95' }]}>TP Total</Text>
+                        <Text style={[st.pendVal, { color: C.purple }]}>Rp {fmt(selTP)}</Text>
+                      </View>
                     </View>
                     {Object.keys(selectedTPRekap).length > 0 && (
-                      <View style={{ backgroundColor: '#374151', borderRadius: 8, padding: 10, marginTop: 8 }}>
-                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#A78BFA', marginBottom: 6 }}>RINCIAN PER TP:</Text>
+                      <View style={st.tpBreakdown}>
+                        <Text style={st.tpBdTitle}>Rincian per Team Polisher:</Text>
                         {Object.entries(selectedTPRekap).map(([nama, total]) => (
-                          <View key={nama} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
-                            <Text style={{ fontSize: 12, color: '#E5E7EB' }}>👤 {nama}</Text>
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#A78BFA' }}>Rp {formatRibuan(total)}</Text>
+                          <View key={nama} style={st.tpBdRow}>
+                            <Ionicons name="person-outline" size={13} color={C.purple} />
+                            <Text style={st.tpBdName}>{nama}</Text>
+                            <Text style={st.tpBdVal}>Rp {fmt(total)}</Text>
                           </View>
                         ))}
                       </View>
@@ -229,38 +259,65 @@ export default function HistoryScreen() {
                   </View>
                 )}
 
-                {/* Pengeluaran */}
-                {selectedPengeluaran && selectedPengeluaran.length > 0 && (
-                  <View style={styles.detailCard}>
-                    <Text style={styles.detailSectionTitle}>Pengeluaran</Text>
-                    {(selectedPengeluaran as any[]).map((p: any, i: number) => (
-                      <View key={i} style={styles.itemRow}>
-                        <Text style={styles.itemName}>{p.jenis}</Text>
-                        <Text style={[styles.itemJumlah, { color: '#EF4444' }]}>Rp {formatRibuan(p.harga)}</Text>
-                      </View>
-                    ))}
-                    <View style={styles.itemTotal}>
-                      <Text style={styles.itemTotalLabel}>TOTAL OUT</Text>
-                      <Text style={[styles.itemTotalVal, { color: '#EF4444' }]}>Rp {formatRibuan(selectedReport.totalOut || 0)}</Text>
+                {/* Detail Layanan */}
+                {selectedItems && (selectedItems as any[]).length > 0 && (
+                  <View style={st.detCard}>
+                    <Text style={st.detCardTitle}>DETAIL LAYANAN</Text>
+                    {(selectedItems as any[]).map((it: any, i: number) => {
+                      const namaTP = it.namaTP || it.nama_tp || '';
+                      const pt     = it.pendapatanTP || it.pendapatan_tp || 0;
+                      return (
+                        <View key={i} style={st.svcRow}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={st.svcName} numberOfLines={2}>{it.serviceName || it.service_name}</Text>
+                            {namaTP ? (
+                              <Text style={st.svcTP}>TP: {namaTP} · +{fmt(pt)}</Text>
+                            ) : null}
+                          </View>
+                          <Text style={st.svcQty}>×{it.qty}</Text>
+                          <Text style={st.svcJumlah}>Rp {fmt(it.jumlah)}</Text>
+                        </View>
+                      );
+                    })}
+                    <View style={st.svcTotal}>
+                      <Text style={st.svcTotalLbl}>TOTAL OMSET</Text>
+                      <Text style={st.svcTotalVal}>Rp {fmt(selectedReport.totalOmset)}</Text>
                     </View>
                   </View>
                 )}
 
-                {/* Pembayaran */}
+                {/* Pengeluaran */}
+                {selectedPengeluaran && (selectedPengeluaran as any[]).length > 0 && (
+                  <View style={st.detCard}>
+                    <Text style={st.detCardTitle}>PENGELUARAN</Text>
+                    {(selectedPengeluaran as any[]).map((p: any, i: number) => (
+                      <View key={i} style={st.svcRow}>
+                        <Text style={[st.svcName, { flex: 1 }]}>{p.jenis}</Text>
+                        <Text style={[st.svcJumlah, { color: C.red }]}>- Rp {fmt(p.harga)}</Text>
+                      </View>
+                    ))}
+                    <View style={st.svcTotal}>
+                      <Text style={st.svcTotalLbl}>TOTAL KELUAR</Text>
+                      <Text style={[st.svcTotalVal, { color: C.red }]}>- Rp {fmt(selectedReport.totalOut || 0)}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Rincian Pembayaran */}
                 {selectedReport.status === 'closed' && (
-                  <View style={styles.detailCard}>
-                    <Text style={styles.detailSectionTitle}>Rincian Pembayaran</Text>
-                    {selectedReport.kasBca > 0 && <DetailRow label="BCA" value={`Rp ${formatRibuan(selectedReport.kasBca)}`} />}
-                    {selectedReport.kasBsi > 0 && <DetailRow label="BSI" value={`Rp ${formatRibuan(selectedReport.kasBsi)}`} />}
-                    {selectedReport.kasCimbBni > 0 && <DetailRow label="CIMB/BNI" value={`Rp ${formatRibuan(selectedReport.kasCimbBni)}`} />}
-                    {selectedReport.kasQrisBca > 0 && <DetailRow label="QRIS BCA" value={`Rp ${formatRibuan(selectedReport.kasQrisBca)}`} />}
-                    {selectedReport.kasMandiri > 0 && <DetailRow label="Mandiri" value={`Rp ${formatRibuan(selectedReport.kasMandiri)}`} />}
-                    {selectedReport.kasVoucher > 0 && <DetailRow label="Voucher" value={`Rp ${formatRibuan(selectedReport.kasVoucher)}`} />}
-                    <View style={styles.divider} />
-                    <DetailRow label="Total Cashless" value={`Rp ${formatRibuan(selectedReport.totalCashless || 0)}`} />
-                    <View style={styles.highlightRow}>
-                      <Text style={styles.highlightLabel}>TUNAI</Text>
-                      <Text style={styles.highlightVal}>Rp {formatRibuan(selectedReport.kasTunai || 0)}</Text>
+                  <View style={st.detCard}>
+                    <Text style={st.detCardTitle}>RINCIAN PEMBAYARAN</Text>
+                    {selectedReport.kasQrisBca > 0   && <DR label="QRIS BCA"    val={`Rp ${fmt(selectedReport.kasQrisBca)}`}  />}
+                    {selectedReport.kasBca > 0        && <DR label="BCA Transfer" val={`Rp ${fmt(selectedReport.kasBca)}`}     />}
+                    {selectedReport.kasBsi > 0        && <DR label="BSI"          val={`Rp ${fmt(selectedReport.kasBsi)}`}     />}
+                    {selectedReport.kasCimbBni > 0    && <DR label="CIMB / BNI"   val={`Rp ${fmt(selectedReport.kasCimbBni)}`}/>}
+                    {selectedReport.kasMandiri > 0    && <DR label="Mandiri"       val={`Rp ${fmt(selectedReport.kasMandiri)}`}/>}
+                    {selectedReport.kasVoucher > 0    && <DR label="Voucher"       val={`Rp ${fmt(selectedReport.kasVoucher)}`}/>}
+                    <View style={[st.detDiv, { marginVertical: 6 }]} />
+                    <DR label="Total Cashless" val={`Rp ${fmt(selectedReport.totalCashless || 0)}`} vc={C.slate} />
+                    <View style={[st.highlightRow, { marginTop: 8 }]}>
+                      <Text style={st.hlLabel}>TUNAI (LOKER)</Text>
+                      <Text style={st.hlVal}>Rp {fmt(selectedReport.kasTunai || 0)}</Text>
                     </View>
                   </View>
                 )}
@@ -273,84 +330,99 @@ export default function HistoryScreen() {
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function StatChip({ icon, label, value, color }: { icon: string; label: string; value: string; color: string }) {
   return (
-    <View style={detailStyles.row}>
-      <Text style={detailStyles.label}>{label}</Text>
-      <Text style={detailStyles.value}>{value}</Text>
+    <View style={st.statChip}>
+      <Ionicons name={icon as any} size={12} color={color} />
+      <Text style={st.statChipLbl}>{label}</Text>
+      <Text style={[st.statChipVal, { color }]}>{value}</Text>
     </View>
   );
 }
 
-const detailStyles = StyleSheet.create({
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  label: { fontSize: 13, color: '#6B7280' },
-  value: { fontSize: 13, fontWeight: '600', color: '#1F2937' },
-});
+function DR({ label, val, vc, bold }: { label: string; val: string; vc?: string; bold?: boolean }) {
+  return (
+    <View style={st.dr}>
+      <Text style={[st.drLbl, bold && { fontWeight: '700', color: C.slate }]}>{label}</Text>
+      <Text style={[st.drVal, bold && { fontWeight: '900', fontSize: 15 }, vc && { color: vc }]}>{val}</Text>
+    </View>
+  );
+}
 
-const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#F9FAFB' },
-  header: { backgroundColor: '#1F2937', paddingHorizontal: 16, paddingVertical: 14 },
-  headerTitle: { color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
-  headerSub: { color: '#9CA3AF', fontSize: 12 },
-  statsRow: { flexDirection: 'row', padding: 12, gap: 10 },
-  statBox: {
-    flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
-  },
-  statBoxOrange: { backgroundColor: '#E85D04' },
-  statVal: { fontSize: 18, fontWeight: '900', color: '#1F2937' },
-  statLabel: { fontSize: 11, color: '#6B7280', marginTop: 2 },
-  loadingBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingText: { fontSize: 14, color: '#6B7280', marginTop: 12 },
-  emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#374151', marginTop: 16 },
-  emptyDesc: { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginTop: 8 },
-  card: {
-    backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
-  },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
-  statusClosed: { backgroundColor: '#10B981' },
-  statusOpen: { backgroundColor: '#F59E0B' },
-  cardDate: { fontSize: 14, fontWeight: '700', color: '#1F2937' },
-  cardKasir: { fontSize: 12, color: '#6B7280', marginTop: 2 },
-  cardRight: { alignItems: 'flex-end' },
-  cardOmset: { fontSize: 14, fontWeight: '800', color: '#E85D04' },
-  cardStatus: { fontSize: 11, fontWeight: '600', marginTop: 2 },
-  statusClosedText: { color: '#10B981' },
-  statusOpenText: { color: '#F59E0B' },
-  cardBottom: { flexDirection: 'row', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
-  cardStat: { flex: 1, alignItems: 'center' },
-  cardStatLabel: { fontSize: 10, color: '#9CA3AF' },
-  cardStatVal: { fontSize: 12, fontWeight: '700', color: '#374151', marginTop: 2 },
-  modalSafe: { flex: 1, backgroundColor: '#F9FAFB' },
-  modalHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#1F2937', paddingHorizontal: 16, paddingVertical: 14,
-  },
-  backBtn: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  modalTitle: { color: '#fff', fontSize: 16, fontWeight: '800', textAlign: 'center' },
-  modalSub: { color: '#9CA3AF', fontSize: 11, textAlign: 'center' },
-  detailCard: {
-    backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
-  },
-  detailSectionTitle: { fontSize: 13, fontWeight: '800', color: '#1F2937', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#F9FAFB' },
-  itemName: { flex: 1, fontSize: 12, color: '#374151' },
-  itemQty: { fontSize: 12, fontWeight: '700', color: '#E85D04', marginHorizontal: 8 },
-  itemJumlah: { fontSize: 12, fontWeight: '600', color: '#059669', minWidth: 90, textAlign: 'right' },
-  itemTotal: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
-  itemTotalLabel: { fontSize: 13, fontWeight: '800', color: '#374151' },
-  itemTotalVal: { fontSize: 14, fontWeight: '900', color: '#E85D04' },
-  divider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6 },
-  highlightRow: {
-    flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#E85D04',
-    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginTop: 8,
-  },
-  highlightLabel: { fontSize: 15, fontWeight: '800', color: '#fff' },
-  highlightVal: { fontSize: 16, fontWeight: '900', color: '#fff' },
+function RR({ label, val, vc, bold }: { label: string; val: string; vc?: string; bold?: boolean }) {
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 }}>
+      <Text style={{ fontSize: bold ? 13 : 12, color: bold ? '#E2E8F0' : '#94A3B8', fontWeight: bold ? '700' : '400' }}>{label}</Text>
+      <Text style={{ fontSize: bold ? 15 : 13, fontWeight: bold ? '900' : '600', color: vc || '#E2E8F0' }}>{val}</Text>
+    </View>
+  );
+}
+
+const st = StyleSheet.create({
+  safe:       { flex: 1, backgroundColor: C.bg },
+  header:     { backgroundColor: C.dark, paddingHorizontal: 18, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle:{ color: C.white, fontSize: 18, fontWeight: '900', letterSpacing: 0.5 },
+  headerSub:  { color: '#94A3B8', fontSize: 11, marginTop: 2 },
+  headerIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+
+  summaryRow: { flexDirection: 'row', gap: 8, padding: 12, paddingBottom: 4 },
+  summaryCard:{ flex: 1, borderRadius: 14, padding: 12, gap: 4, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
+  sumVal:     { fontSize: 18, fontWeight: '900', color: C.white },
+  sumLbl:     { fontSize: 10, fontWeight: '600', color: '#94A3B8' },
+
+  centerBox:  { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: C.slate, marginTop: 14 },
+  emptyTxt:   { fontSize: 13, color: C.gray, textAlign: 'center', marginTop: 6 },
+
+  card:       { backgroundColor: C.white, borderRadius: 14, padding: 14, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  cardHead:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  statusDot:  { width: 10, height: 10, borderRadius: 5 },
+  cardDate:   { fontSize: 14, fontWeight: '800', color: C.dark },
+  cardMeta:   { fontSize: 11, color: C.gray, marginTop: 1 },
+  cardRight:  { alignItems: 'flex-end', gap: 4 },
+  cardOmset:  { fontSize: 14, fontWeight: '900', color: C.orange },
+  statusPill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 12 },
+  statusPillTxt:{ fontSize: 10, fontWeight: '700' },
+  cardStats:  { flexDirection: 'row', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.border, gap: 6 },
+  statChip:   { flex: 1, alignItems: 'center', gap: 2 },
+  statChipLbl:{ fontSize: 9, color: C.gray, fontWeight: '500' },
+  statChipVal:{ fontSize: 10, fontWeight: '800' },
+
+  modalSafe:  { flex: 1, backgroundColor: C.bg },
+  modalHeader:{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.dark, paddingHorizontal: 16, paddingVertical: 14 },
+  backBtn:    { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  modalTitle: { color: C.white, fontSize: 16, fontWeight: '800' },
+  modalSub:   { color: '#94A3B8', fontSize: 11, marginTop: 1 },
+
+  detCard:    { backgroundColor: C.white, borderRadius: 14, padding: 14, marginBottom: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 1 },
+  detCardTitle:{ fontSize: 11, fontWeight: '800', color: C.slate, letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10 },
+  detDiv:     { height: 1, backgroundColor: '#374151', marginVertical: 4 },
+  dr:         { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  drLbl:      { fontSize: 13, color: C.gray },
+  drVal:      { fontSize: 13, fontWeight: '600', color: C.dark },
+
+  highlightRow:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: C.orange, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  hlLabel:    { fontSize: 12, fontWeight: '800', color: C.white },
+  hlSub:      { fontSize: 9, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  hlVal:      { fontSize: 18, fontWeight: '900', color: C.white },
+
+  pendRow:    { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  pendBox:    { flex: 1, borderRadius: 12, padding: 12, alignItems: 'center', gap: 4 },
+  pendLbl:    { fontSize: 11, fontWeight: '600' },
+  pendVal:    { fontSize: 15, fontWeight: '900' },
+
+  tpBreakdown:{ backgroundColor: C.purpleBg, borderRadius: 10, padding: 10 },
+  tpBdTitle:  { fontSize: 11, fontWeight: '700', color: '#5B21B6', marginBottom: 6 },
+  tpBdRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
+  tpBdName:   { flex: 1, fontSize: 13, color: C.slate, fontWeight: '600' },
+  tpBdVal:    { fontSize: 13, fontWeight: '800', color: C.purple },
+
+  svcRow:     { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border, gap: 8 },
+  svcName:    { fontSize: 12, color: C.slate, fontWeight: '500' },
+  svcTP:      { fontSize: 10, color: C.purple, marginTop: 2 },
+  svcQty:     { fontSize: 12, fontWeight: '800', color: C.orange, marginHorizontal: 4 },
+  svcJumlah:  { fontSize: 12, fontWeight: '700', color: C.green, minWidth: 90, textAlign: 'right' },
+  svcTotal:   { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.grayL },
+  svcTotalLbl:{ fontSize: 12, fontWeight: '800', color: C.slate },
+  svcTotalVal:{ fontSize: 14, fontWeight: '900', color: C.orange },
 });

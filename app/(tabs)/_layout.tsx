@@ -1,14 +1,5 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Platform, View, StyleSheet } from 'react-native';
-
-function TabIcon({ name, color, focused }: { name: any; color: string; focused: boolean }) {
-  return (
-    <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
-      <Ionicons name={name} size={22} color={color} />
-    </View>
-  );
-}
 
 export default function TabLayout() {
   return (
@@ -19,25 +10,18 @@ export default function TabLayout() {
         tabBarInactiveTintColor: '#9CA3AF',
         tabBarStyle: {
           backgroundColor: '#FFFFFF',
-          borderTopColor: '#FED7AA',
-          borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 86 : 70,
-          paddingBottom: Platform.OS === 'ios' ? 26 : 12,
-          paddingTop: 8,
-          shadowColor: '#E85D04',
-          shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: 0.10,
-          shadowRadius: 16,
-          elevation: 12,
+          borderTopColor: '#E5E7EB',
+          height: 62,
+          paddingBottom: 8,
+          paddingTop: 4,
         },
         tabBarLabelStyle: {
           fontSize: 10,
           fontWeight: '700',
-          letterSpacing: 0.4,
-          marginTop: 0,
+          letterSpacing: 0.3,
         },
-        tabBarIconStyle: {
-          marginTop: 2,
+        tabBarItemStyle: {
+          paddingVertical: 2,
         },
       }}
     >
@@ -45,8 +29,8 @@ export default function TabLayout() {
         name="antrian"
         options={{
           title: 'Antrian',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="car" color={color} focused={focused} />
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="car" size={size} color={color} />
           ),
         }}
       />
@@ -54,8 +38,8 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Kasir',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="calculator" color={color} focused={focused} />
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="calculator" size={size} color={color} />
           ),
         }}
       />
@@ -63,8 +47,8 @@ export default function TabLayout() {
         name="closing"
         options={{
           title: 'Closing',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="document-text" color={color} focused={focused} />
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="document-text" size={size} color={color} />
           ),
         }}
       />
@@ -72,8 +56,8 @@ export default function TabLayout() {
         name="history"
         options={{
           title: 'Riwayat',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="time" color={color} focused={focused} />
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="time" size={size} color={color} />
           ),
         }}
       />
@@ -81,24 +65,11 @@ export default function TabLayout() {
         name="settings"
         options={{
           title: 'Pengaturan',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="settings" color={color} focused={focused} />
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings" size={size} color={color} />
           ),
         }}
       />
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  iconWrap: {
-    width: 40,
-    height: 28,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconWrapActive: {
-    backgroundColor: '#FFF0E6',
-  },
-});
