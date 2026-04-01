@@ -222,28 +222,96 @@ export default function AntrianScreen() {
       if (!formWasher.trim()) throw new Error('Pilih atau isi nama washer');
       if (formSelectedSvc?.hasTP && !formTPName.trim()) throw new Error('Isi nama TP');
 
+      const harga       = formIsFree ? 0 : formHarga;
+      const upahWasher  = formIsFree ? 0 : formUpahWasher;
+      const pendTP      = formIsFree ? 0 : formPendapatanTP;
+
       await blink.db.antrian.create({
-        id:           `ant_${Date.now()}`,
-        tanggal:      today,
-        nomor:        nomorBerikut,
-        jenis:        KATEGORI_MOBIL_LABEL[selectedCar.kategori as KategoriMobil] || selectedCar.kategori,
-        nopol:        formNopol.trim().toUpperCase(),
-        modelMobil:   selectedCar.nama,
-        kategoriMobil:selectedCar.kategori,
-        serviceId:    formServiceId,
-        serviceName:  formServiceName,
-        kategori:     formKategori,
-        harga:        formIsFree ? 0 : formHarga,
-        namaWasher:   formWasher.trim(),
-        upahWasher:   formIsFree ? 0 : formUpahWasher,
-        namaTP:       formTPName.trim() || '',
-        pendapatanTP: formIsFree ? 0 : formPendapatanTP,
-        ket:          formKet.trim(),
-        status:       'antri',
-        isFree:       formIsFree ? 1 : 0,
+        id:            `ant_${Date.now()}`,
+        tanggal:       today,
+        nomor:         nomorBerikut,
+        jenis:         KATEGORI_MOBIL_LABEL[selectedCar.kategori as KategoriMobil] || selectedCar.kategori,
+        nopol:         formNopol.trim().toUpperCase(),
+        modelMobil:    selectedCar.nama,
+        kategoriMobil: selectedCar.kategori,
+        serviceId:     formServiceId,
+        serviceName:   formServiceName,
+        kategori:      formKategori,
+        harga,
+        namaWasher:    formWasher.trim(),
+        upahWasher,
+        namaTP:        formTPName.trim() || '',
+        pendapatanTP:  pendTP,
+        ket:           formKet.trim(),
+        status:        'antri',
+        isFree:        formIsFree ? 1 : 0,
       });
+
+      // ── Auto-update closing aktif ──
+      try {
+        const settingsRes = await blink.db.appSettings.list();
+        const settingsMap: Record<string, string> = {};
+        (settingsRes as any[]).forEach((s: any) => { settingsMap[s.key] = s.value; });
+        const closingId = settingsMap['closing_aktif_id'];
+        if (closingId) {
+          // Cek closing masih open
+          const closingRes = await blink.db.closingReports.get(closingId);
+          const closing = closingRes as any;
+          if (closing && closing.status === 'open' && closing.tanggal === today) {
+            // Upsert closing_item (grouping per service)
+            const existingItems = await blink.db.closingItems.list({ where: { closingId } });
+            const existItem = (existingItems as any[]).find(
+              (it: any) => (it.serviceId || it.service_id) === formServiceId
+            );
+            if (existItem && !formIsFree) {
+              const newQty    = (existItem.qty || 0) + 1;
+              const newJumlah = newQty * harga;
+              const newKas    = (existItem.kas || 0) + (formSelectedSvc?.kasDefault || 0);
+              const newPW     = (existItem.pendapatanWasher || existItem.pendapatan_washer || 0) + upahWasher;
+              const newPT     = (existItem.pendapatanTp || existItem.pendapatan_tp || 0) + pendTP;
+              await blink.db.closingItems.update(existItem.id, {
+                qty: newQty, jumlah: newJumlah, kas: newKas,
+                pendapatanWasher: newPW,
+                pendapatanTp: newPT,
+                namaTp: formTPName.trim() || existItem.namaTp || existItem.nama_tp || '',
+              });
+            } else if (!formIsFree) {
+              await blink.db.closingItems.create({
+                id:               `item_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                closingId,
+                serviceId:        formServiceId,
+                serviceName:      formServiceName,
+                kategori:         formKategori,
+                harga,
+                qty:              1,
+                kas:              formSelectedSvc?.kasDefault || 0,
+                jumlah:           harga,
+                namaTp:           formTPName.trim() || '',
+                pendapatanWasher: upahWasher,
+                pendapatanTp:     pendTP,
+              });
+            }
+            // Update total_omset & jumlah_mobil di closing_reports
+            const allItems = await blink.db.closingItems.list({ where: { closingId } });
+            const newOmset = (allItems as any[]).reduce((s: number, it: any) => s + (it.jumlah || 0), 0) + (formIsFree ? 0 : harga);
+            const newJumlahMobil = (closing.jumlahMobil || 0) + 1;
+            await blink.db.closingReports.update(closingId, {
+              totalOmset:  newOmset,
+              jumlahMobil: newJumlahMobil,
+              updatedAt:   new Date().toISOString(),
+            });
+          }
+        }
+      } catch (_err) {
+        // Auto-update gagal tidak blocker — silent
+      }
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['antrian', today] }); closeModal(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['antrian', today] });
+      qc.invalidateQueries({ queryKey: ['closing_reports'] });
+      qc.invalidateQueries({ queryKey: ['closing_items'] });
+      closeModal();
+    },
     onError:   (e: any) => Alert.alert('Error', e.message),
   });
 
@@ -255,7 +323,11 @@ export default function AntrianScreen() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => blink.db.antrian.delete(id),
-    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['antrian', today] }); setSelectedItem(null); },
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['antrian', today] });
+      qc.invalidateQueries({ queryKey: ['antrian_closing', today] });
+      setSelectedItem(null);
+    },
   });
 
   // ── Modal helpers ──

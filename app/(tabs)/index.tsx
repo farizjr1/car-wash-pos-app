@@ -261,22 +261,7 @@ export default function KasirScreen() {
 
         {/* Kasir input row */}
         <View style={s.kasirRow}>
-          {/* Kasir chips from DB */}
-          {kasirDBList && kasirDBList.length > 0 && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-              {kasirDBList.map((k: any) => (
-                <TouchableOpacity
-                  key={k.id}
-                  style={[s.kasirChip, kasir === k.nama && s.kasirChipActive]}
-                  onPress={() => setKasir(k.nama)}
-                >
-                  <Text style={[s.kasirChipTxt, kasir === k.nama && s.kasirChipTxtActive]}>{k.nama}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-          {/* Manual input */}
-          <View style={s.kasirInputWrap}>
+          <View style={[s.kasirInputWrap, { flex: 1 }]}>
             <Ionicons name="person-circle" size={18} color="#E85D04" />
             <TextInput
               style={s.kasirInput}
@@ -291,6 +276,14 @@ export default function KasirScreen() {
               </TouchableOpacity>
             )}
           </View>
+          {kasirDBList && kasirDBList.length > 0 && (
+            <TouchableOpacity
+              style={s.kasirPickBtn}
+              onPress={() => setKasirPickerVisible(true)}
+            >
+              <Ionicons name="chevron-down" size={14} color="#fff" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -767,6 +760,43 @@ export default function KasirScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* ── KASIR PICKER MODAL ── */}
+      <Modal visible={kasirPickerVisible} transparent animationType="slide">
+        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setKasirPickerVisible(false)}>
+          <TouchableOpacity style={[s.modalBox, { maxHeight: '70%' }]} activeOpacity={1}>
+            <View style={[s.modalTopStrip, { backgroundColor: '#E85D04' }]} />
+            <View style={s.modalHeader}>
+              <Text style={s.modalTitle}>Pilih Kasir</Text>
+              <Text style={[s.modalPrice, { color: '#6B7280', fontSize: 11 }]}>
+                Shift {shiftAktif}
+              </Text>
+            </View>
+            <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+              {kasirDBList?.map((k: any) => (
+                <TouchableOpacity
+                  key={k.id}
+                  style={[s.tpPickerRow, kasir === k.nama && s.tpPickerRowActive]}
+                  onPress={() => { setKasir(k.nama); setKasirPickerVisible(false); }}
+                >
+                  <View style={[s.tpAvatarCircle, kasir === k.nama && s.tpAvatarCircleActive]}>
+                    <Text style={[s.tpAvatarText, kasir === k.nama && { color: '#fff' }]}>
+                      {k.nama.charAt(0)}
+                    </Text>
+                  </View>
+                  <Text style={[s.tpPickerName, kasir === k.nama && s.tpPickerNameActive]}>
+                    {k.nama}
+                  </Text>
+                  {kasir === k.nama && <Ionicons name="checkmark-circle" size={20} color="#E85D04" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[s.modalBtnCancel, { marginTop: 12 }]} onPress={() => setKasirPickerVisible(false)}>
+              <Text style={s.modalBtnCancelText}>Tutup</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -872,6 +902,8 @@ const s = StyleSheet.create({
   },
   kasirRow: {
     marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   kasirInputWrap: {
     flexDirection: 'row',
@@ -910,6 +942,17 @@ const s = StyleSheet.create({
   kasirChipTxtActive: {
     color: '#E85D04',
     fontWeight: '800',
+  },
+  kasirPickBtn: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginLeft: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // ── LEGEND ──
@@ -1672,5 +1715,115 @@ const s = StyleSheet.create({
     fontWeight: '800',
     color: '#7C3AED',
     marginTop: 1,
+  },
+
+  // ── WASHER BERTUGAS ──
+  washerSection: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    overflow: 'hidden',
+    shadowColor: '#0284C7',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  washerSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F0F9FF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#BAE6FD',
+  },
+  washerIconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: '#E0F2FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  washerSectionTitle: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0369A1',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  washerCountBadge: {
+    backgroundColor: '#0284C7',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  washerCountText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  washerChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    padding: 12,
+  },
+  washerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+  },
+  washerChipActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#0284C7',
+  },
+  washerChipAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  washerChipAvatarActive: {
+    backgroundColor: '#0284C7',
+  },
+  washerChipAvatarText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#6B7280',
+  },
+  washerChipName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  washerChipNameActive: {
+    color: '#0284C7',
+    fontWeight: '700',
+  },
+  washerEmptyWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  washerEmptyText: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
   },
 });
