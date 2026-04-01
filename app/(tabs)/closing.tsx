@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
-  StyleSheet, Alert, Platform,
+  StyleSheet, Alert, Platform, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -145,6 +145,50 @@ export default function ClosingScreen() {
     { jenis: '', harga: '' }, { jenis: '', harga: '' }, { jenis: '', harga: '' },
   ]);
 
+  // ── Edit Item Modal state ──
+  const [editModal, setEditModal]   = useState(false);
+  const [editItem,  setEditItem]    = useState<any>(null);
+  const [editHarga, setEditHarga]   = useState('');
+  const [editKas,   setEditKas]     = useState('');
+  const [editPW,    setEditPW]      = useState('');
+  const [editPT,    setEditPT]      = useState('');
+  const [editNamaTP,setEditNamaTP]  = useState('');
+
+  const openEditModal = (item: any) => {
+    setEditItem(item);
+    setEditHarga(String(item.harga || 0));
+    setEditKas(String(item.kas || 0));
+    setEditPW(String(item.pendapatanWasher || item.pendapatan_washer || 0));
+    setEditPT(String(item.pendapatanTP || item.pendapatan_tp || 0));
+    setEditNamaTP(item.namaTP || item.nama_tp || '');
+    setEditModal(true);
+  };
+
+  const editItemMutation = useMutation({
+    mutationFn: async () => {
+      if (!editItem?.id) throw new Error('Item tidak valid');
+      const h  = parseFloat(editHarga) || 0;
+      const k  = parseFloat(editKas)   || 0;
+      const pw = parseFloat(editPW)    || 0;
+      const pt = parseFloat(editPT)    || 0;
+      const qty = editItem.qty || 1;
+      await blink.db.closingItems.update(editItem.id, {
+        harga:            h,
+        kas:              k,
+        jumlah:           h * qty,
+        pendapatanWasher: pw,
+        pendapatanTp:     pt,
+        namaTp:           editNamaTP,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['closing_items', latestOpen?.id] });
+      setEditModal(false);
+      setEditItem(null);
+    },
+    onError: (e: any) => Alert.alert('Error', e.message),
+  });
+
   const parseN = (s: string) => parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
 
   const totalCashlessGross = parseN(qrisBca) + parseN(bca) + parseN(bsi) +
@@ -156,7 +200,45 @@ export default function ClosingScreen() {
   const totalSavedOut  = (savedPeng as any[])?.reduce((s: number, p: any) => s + (p.harga || 0), 0) || 0;
   const totalOut       = totalAutoOut + totalManualOut + totalSavedOut;
 
-  const omset      = latestOpen?.totalOmset || 0;
+  // ── Jumlah kendaraan dari antrian (live) ──
+  const totalAntrianHariIni = useMemo(() => {
+    return antrian?.filter((a: any) => !Number(a.isFree ?? a.is_free)).length || 0;
+  }, [antrian]);
+
+  const totalOmsetDariAntrian = useMemo(() => {
+    return antrian?.filter((a: any) => !Number(a.isFree ?? a.is_free))
+      .reduce((s: number, a: any) => s + (a.harga || 0), 0) || 0;
+  }, [antrian]);
+
+  // ── Auto-update jumlahMobil & totalOmset di closing report ──
+  const prevAntrianRef = useRef<{ count: number; omset: number } | null>(null);
+  useEffect(() => {
+    if (!latestOpen?.id) return;
+    const prev = prevAntrianRef.current;
+    const changed =
+      prev === null ||
+      prev.count !== totalAntrianHariIni ||
+      prev.omset !== totalOmsetDariAntrian;
+    if (!changed) return;
+    const needsUpdate =
+      totalAntrianHariIni !== (latestOpen.jumlahMobil || 0) ||
+      totalOmsetDariAntrian !== (latestOpen.totalOmset || 0);
+    if (!needsUpdate) {
+      prevAntrianRef.current = { count: totalAntrianHariIni, omset: totalOmsetDariAntrian };
+      return;
+    }
+    prevAntrianRef.current = { count: totalAntrianHariIni, omset: totalOmsetDariAntrian };
+    blink.db.closingReports
+      .update(latestOpen.id, {
+        jumlahMobil: totalAntrianHariIni,
+        totalOmset:  totalOmsetDariAntrian,
+        updatedAt:   new Date().toISOString(),
+      })
+      .then(() => qc.invalidateQueries({ queryKey: ['closing_reports'] }))
+      .catch(() => {/* silent fail */});
+  }, [totalAntrianHariIni, totalOmsetDariAntrian, latestOpen?.id]);
+
+  const omset      = totalOmsetDariAntrian || latestOpen?.totalOmset || 0;
   const omsetBersih = omset - totalOut;
   const tunaiRill  = omsetBersih - totalCashless;
   const totalPend  = totalHarga - totalKas;
@@ -261,7 +343,7 @@ export default function ClosingScreen() {
           </View>
           <View style={st.infoGrid}>
             <InfoBox icon="person-outline" label="Kasir" val={latestOpen.kasir} />
-            <InfoBox icon="car-outline"    label="Kendaraan" val={`${latestOpen.jumlahMobil}`} />
+            <InfoBox icon="car-outline"    label="Kendaraan" val={`${totalAntrianHariIni}`} />
             <InfoBox icon="cash-outline"   label="Total Omset" val={`Rp ${fmt(omset)}`} vc={C.orange} />
           </View>
         </View>
@@ -327,6 +409,7 @@ export default function ClosingScreen() {
             <View style={st.cardTitleRow}>
               <Ionicons name="list-outline" size={16} color={C.slate} />
               <Text style={st.cardTitle}>DETAIL LAYANAN</Text>
+              <Text style={{ fontSize: 9, color: C.gray, fontStyle: 'italic' }}>Tap item untuk edit</Text>
             </View>
             <View style={st.tableHead}>
               <Text style={[st.th, { flex: 2.5 }]}>LAYANAN</Text>
@@ -339,7 +422,12 @@ export default function ClosingScreen() {
               const namaTP = it.namaTP || it.nama_tp || '';
               const pt     = it.pendapatanTP || it.pendapatan_tp || 0;
               return (
-                <View key={i} style={st.tableRow}>
+                <TouchableOpacity
+                  key={i}
+                  style={[st.tableRow, { backgroundColor: editItem?.id === it.id ? C.orangeL : undefined }]}
+                  onPress={() => openEditModal(it)}
+                  activeOpacity={0.7}
+                >
                   <View style={{ flex: 2.5 }}>
                     <Text style={st.tdName} numberOfLines={2}>{it.serviceName || it.service_name}</Text>
                     {namaTP ? <Text style={st.tdTP}>TP: {namaTP} +{fmt(pt)}</Text> : null}
@@ -352,7 +440,7 @@ export default function ClosingScreen() {
                   <Text style={[st.td, { width: 60, textAlign: 'right', color: C.green, fontWeight: '800' }]}>
                     {fmt(it.jumlah)}
                   </Text>
-                </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -505,6 +593,140 @@ export default function ClosingScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* ── Edit Item Modal ── */}
+      <Modal
+        visible={editModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditModal(false)}
+      >
+        <View style={st.modalOverlay}>
+          <View style={st.modalBox}>
+            {/* Modal Header */}
+            <View style={st.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={st.modalTitle}>EDIT ITEM</Text>
+                {editItem && (
+                  <Text style={st.modalSub} numberOfLines={1}>
+                    {editItem.serviceName || editItem.service_name} × {editItem.qty}
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity
+                onPress={() => setEditModal(false)}
+                style={st.modalCloseBtn}
+              >
+                <Ionicons name="close" size={20} color={C.gray} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {/* Harga */}
+              <View style={st.modalField}>
+                <Text style={st.modalLbl}>
+                  <Ionicons name="cash-outline" size={13} color={C.orange} /> {'  '}Harga per Unit
+                </Text>
+                <TextInput
+                  style={st.modalInput}
+                  value={editHarga}
+                  onChangeText={setEditHarga}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={C.gray}
+                />
+                {editItem && (
+                  <Text style={st.modalHint}>
+                    Jumlah = {fmt((parseFloat(editHarga) || 0) * (editItem.qty || 1))}
+                  </Text>
+                )}
+              </View>
+
+              {/* KAS */}
+              <View style={st.modalField}>
+                <Text style={st.modalLbl}>
+                  <Ionicons name="wallet-outline" size={13} color={C.slate} /> {'  '}KAS per Unit
+                </Text>
+                <TextInput
+                  style={st.modalInput}
+                  value={editKas}
+                  onChangeText={setEditKas}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={C.gray}
+                />
+              </View>
+
+              {/* Pendapatan Washer */}
+              <View style={st.modalField}>
+                <Text style={st.modalLbl}>
+                  <Ionicons name="water-outline" size={13} color={C.green} /> {'  '}Pendapatan Washer
+                </Text>
+                <TextInput
+                  style={[st.modalInput, { borderColor: C.green }]}
+                  value={editPW}
+                  onChangeText={setEditPW}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={C.gray}
+                />
+              </View>
+
+              {/* Pendapatan TP */}
+              <View style={st.modalField}>
+                <Text style={st.modalLbl}>
+                  <Ionicons name="star-outline" size={13} color={C.purple} /> {'  '}Pendapatan TP
+                </Text>
+                <TextInput
+                  style={[st.modalInput, { borderColor: C.purple }]}
+                  value={editPT}
+                  onChangeText={setEditPT}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={C.gray}
+                />
+              </View>
+
+              {/* Nama TP */}
+              <View style={st.modalField}>
+                <Text style={st.modalLbl}>
+                  <Ionicons name="person-outline" size={13} color={C.purple} /> {'  '}Nama TP
+                </Text>
+                <TextInput
+                  style={[st.modalInput, { borderColor: C.purple }]}
+                  value={editNamaTP}
+                  onChangeText={setEditNamaTP}
+                  placeholder="Kosongkan jika tidak ada TP"
+                  placeholderTextColor={C.gray}
+                  autoCapitalize="words"
+                />
+              </View>
+
+              {/* Buttons */}
+              <View style={st.modalBtnRow}>
+                <TouchableOpacity
+                  style={st.modalCancelBtn}
+                  onPress={() => setEditModal(false)}
+                  disabled={editItemMutation.isPending}
+                >
+                  <Text style={st.modalCancelTxt}>BATAL</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[st.modalSaveBtn, editItemMutation.isPending && { opacity: 0.6 }]}
+                  onPress={() => editItemMutation.mutate()}
+                  disabled={editItemMutation.isPending}
+                >
+                  <Ionicons name="checkmark-circle" size={16} color={C.white} />
+                  <Text style={st.modalSaveTxt}>
+                    {editItemMutation.isPending ? 'Menyimpan...' : 'SIMPAN'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* ── Footer Button ── */}
       <View style={st.footer}>
         <TouchableOpacity
@@ -650,6 +872,23 @@ const st = StyleSheet.create({
   hlLabel:      { fontSize: 13, fontWeight: '800', color: C.white },
   hlSub:        { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
   hlVal:        { fontSize: 20, fontWeight: '900', color: C.white },
+
+  // ── Modal styles ──
+  modalOverlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  modalBox:       { backgroundColor: C.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '85%' },
+  modalHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 18 },
+  modalTitle:     { fontSize: 14, fontWeight: '900', color: C.dark, letterSpacing: 0.8 },
+  modalSub:       { fontSize: 12, color: C.gray, marginTop: 2 },
+  modalCloseBtn:  { width: 32, height: 32, borderRadius: 16, backgroundColor: C.grayBg, alignItems: 'center', justifyContent: 'center' },
+  modalField:     { marginBottom: 14 },
+  modalLbl:       { fontSize: 11, fontWeight: '700', color: C.slate, marginBottom: 5 },
+  modalInput:     { borderWidth: 1.5, borderColor: C.border, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: C.dark, backgroundColor: C.grayBg },
+  modalHint:      { fontSize: 10, color: C.gray, marginTop: 4, fontStyle: 'italic' },
+  modalBtnRow:    { flexDirection: 'row', gap: 10, marginTop: 6 },
+  modalCancelBtn: { flex: 1, borderWidth: 1.5, borderColor: C.border, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+  modalCancelTxt: { fontSize: 13, fontWeight: '700', color: C.gray },
+  modalSaveBtn:   { flex: 2, flexDirection: 'row', gap: 8, backgroundColor: C.orange, borderRadius: 12, paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
+  modalSaveTxt:   { fontSize: 13, fontWeight: '800', color: C.white },
 
   footer:       { padding: 14, backgroundColor: C.white, borderTopWidth: 1, borderTopColor: C.border, paddingBottom: Platform.OS === 'ios' ? 28 : 14 },
   closeBtn:     { flexDirection: 'row', gap: 10, backgroundColor: C.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', justifyContent: 'center' },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, TextInput, TouchableOpacity,
   StyleSheet, Alert, Platform, Modal,
@@ -40,6 +40,7 @@ export default function KasirScreen() {
   const [tpMap,   setTpMap]   = useState<TPMap>({});
   const [katMap,  setKatMap]  = useState<KatMap>({});
   const [kasir,   setKasir]   = useState('');
+  const [selectedWashers, setSelectedWashers] = useState<string[]>([]);
 
   // Modal QTY
   const [qtyModal,   setQtyModal]   = useState(false);
@@ -55,6 +56,9 @@ export default function KasirScreen() {
   // Modal Poles
   const [polesModal, setPolesModal] = useState(false);
   const [polesSvc,   setPolesSvc]   = useState<Service | null>(null);
+
+  // Kasir picker modal
+  const [kasirPickerVisible, setKasirPickerVisible] = useState(false);
 
   // ── DB: Karyawan dinamis ──
   const { data: karyawanList } = useQuery({
@@ -77,6 +81,22 @@ export default function KasirScreen() {
   });
   const kasirAktif = settingsList?.find((s: any) => s.key === 'kasir_aktif')?.value || '';
   const shiftAktif = settingsList?.find((s: any) => s.key === 'shift_aktif')?.value || '1';
+
+  // Kasir list from DB
+  const { data: kasirDBList } = useQuery({
+    queryKey: ['kasir_list'],
+    queryFn: async () => {
+      const res = await blink.db.karyawan.list({ where: { peran: 'kasir' }, orderBy: { nama: 'asc' } });
+      return (res as any[]).filter((k: any) => Number(k.aktif) > 0);
+    },
+  });
+
+  // Auto-fill kasir from settings
+  useEffect(() => {
+    if (kasirAktif && !kasir) {
+      setKasir(kasirAktif);
+    }
+  }, [kasirAktif]);
 
   const getQty = (id: string) => qtyMap[id] || 0;
 
@@ -156,7 +176,7 @@ export default function KasirScreen() {
         status: 'open', totalOmset, totalOut: 0,
         kasBca: 0, kasBsi: 0, kasCimbBni: 0, kasQrisBca: 0,
         kasMandiri: 0, kasVoucher: 0, kasTunai: 0, totalCashless: 0,
-        jumlahMobil: totalMobil, catatan: '',
+        jumlahMobil: totalMobil, catatan: selectedWashers.length > 0 ? `Washer: ${selectedWashers.join(', ')}` : '',
       });
 
       for (const s of activeServices) {
@@ -173,7 +193,7 @@ export default function KasirScreen() {
         } else if (s.hasTP) {
           pendWasher = (s.upahWasherTP || 0) * qty;
         } else {
-          pendWasher = getPendapatanWasher(harga, s.kasDefault || 0) * qty;
+          pendWasher = getPendapatanWasher(s.harga as number, s.kasDefault || 0) * qty;
         }
         const pendTP = isTP ? calcTP(s, katMap[s.id]) * qty : 0;
 
@@ -187,7 +207,12 @@ export default function KasirScreen() {
       }
       return id;
     },
-    onSuccess: () => {
+    onSuccess: async (id) => {
+      // Simpan closing_aktif_id ke app_settings agar antrian.tsx bisa auto-update
+      try {
+        await blink.db.appSettings.upsert({ key: 'closing_aktif_id', value: id });
+        queryClient.invalidateQueries({ queryKey: ['app_settings'] });
+      } catch (_) {}
       queryClient.invalidateQueries({ queryKey: ['closing_reports'] });
       Alert.alert('✅ Berhasil',
         `Closing tersimpan!\nOmset: Rp ${fmt(totalOmset)}\nKAS: Rp ${fmt(totalKas)}\nPendapatan TP: Rp ${fmt(totalTP)}`,
@@ -197,7 +222,7 @@ export default function KasirScreen() {
     onError: (e: any) => Alert.alert('⚠️ Error', e.message),
   });
 
-  const resetForm = () => { setQtyMap({}); setTpMap({}); setKatMap({}); setKasir(''); };
+  const resetForm = () => { setQtyMap({}); setTpMap({}); setKatMap({}); setKasir(''); setSelectedWashers([]); };
   const handleReset = () =>
     Alert.alert('Reset', 'Yakin ingin mereset semua data?', [
       { text: 'Batal', style: 'cancel' },
@@ -236,6 +261,21 @@ export default function KasirScreen() {
 
         {/* Kasir input row */}
         <View style={s.kasirRow}>
+          {/* Kasir chips from DB */}
+          {kasirDBList && kasirDBList.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {kasirDBList.map((k: any) => (
+                <TouchableOpacity
+                  key={k.id}
+                  style={[s.kasirChip, kasir === k.nama && s.kasirChipActive]}
+                  onPress={() => setKasir(k.nama)}
+                >
+                  <Text style={[s.kasirChipTxt, kasir === k.nama && s.kasirChipTxtActive]}>{k.nama}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {/* Manual input */}
           <View style={s.kasirInputWrap}>
             <Ionicons name="person-circle" size={18} color="#E85D04" />
             <TextInput
@@ -448,6 +488,56 @@ export default function KasirScreen() {
             })}
           </View>
         )}
+
+        {/* ── WASHER BERTUGAS ── */}
+        <View style={s.washerSection}>
+          <View style={s.washerSectionHeader}>
+            <View style={s.washerIconWrap}>
+              <Ionicons name="water" size={14} color="#0284C7" />
+            </View>
+            <Text style={s.washerSectionTitle}>Washer Bertugas</Text>
+            {selectedWashers.length > 0 && (
+              <View style={s.washerCountBadge}>
+                <Text style={s.washerCountText}>{selectedWashers.length} dipilih</Text>
+              </View>
+            )}
+          </View>
+          <View style={s.washerChipRow}>
+            {washerList.length === 0 ? (
+              <View style={s.washerEmptyWrap}>
+                <Ionicons name="person-add-outline" size={14} color="#9CA3AF" />
+                <Text style={s.washerEmptyText}>Tambah washer di Pengaturan</Text>
+              </View>
+            ) : (
+              washerList.map((nama: string) => {
+                const isSelected = selectedWashers.includes(nama);
+                return (
+                  <TouchableOpacity
+                    key={nama}
+                    style={[s.washerChip, isSelected && s.washerChipActive]}
+                    onPress={() => {
+                      setSelectedWashers(prev =>
+                        isSelected ? prev.filter(w => w !== nama) : [...prev, nama]
+                      );
+                    }}
+                  >
+                    <View style={[s.washerChipAvatar, isSelected && s.washerChipAvatarActive]}>
+                      <Text style={[s.washerChipAvatarText, isSelected && { color: '#fff' }]}>
+                        {nama.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={[s.washerChipName, isSelected && s.washerChipNameActive]}>
+                      {nama}
+                    </Text>
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={14} color="#0284C7" />
+                    )}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        </View>
 
         {/* ── WARNINGS ── */}
         {(missingTP.length > 0 || missingKat.length > 0) && (
@@ -799,6 +889,27 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#fff',
+  },
+  kasirChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  kasirChipActive: {
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderColor: '#fff',
+  },
+  kasirChipTxt: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
+  },
+  kasirChipTxtActive: {
+    color: '#E85D04',
+    fontWeight: '800',
   },
 
   // ── LEGEND ──
