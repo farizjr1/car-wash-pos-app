@@ -102,10 +102,12 @@ export default function ClosingScreen() {
     for (const a of antrian) {
       const isFree   = Number(a.isFree || a.is_free || 0) > 0;
       const kat      = a.kategoriMobil || a.kategori_mobil || 'umum';
-      const upah     = UPAH_BY_KAT[kat] || 11000;
+      // Untuk cuci free: gunakan upahWasher yang tersimpan di antrian (washer tetap dibayar)
+      const upahRecord = a.upahWasher || a.upah_washer || 0;
+      const upah     = upahRecord > 0 ? upahRecord : (UPAH_BY_KAT[kat] || 11000);
       if (isFree)                                           totalFree += upah;
       if (!isFree && kat === 'big')                         countBig++;
-      if (!isFree && (a.kategori || '') === 'Premium')      countPrem++;
+      if (!isFree && kat === 'premium')                     countPrem++;
     }
     const result: AutoPeng[] = [];
     if (totalFree > 0) result.push({ jenis: 'free/p.free', harga: totalFree,       ket: `Cuci free (upah washer)` });

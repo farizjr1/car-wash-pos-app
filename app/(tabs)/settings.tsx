@@ -65,13 +65,16 @@ export default function SettingsScreen() {
       (res as AppSetting[]).forEach(s => { map[s.key] = s.value; });
       return map;
     },
+    staleTime: 1000 * 10,
   });
 
   const setSetting = async (key: string, value: string) => {
     try {
       await blink.db.appSettings.upsert({ key, value });
-      qc.invalidateQueries({ queryKey: ['app_settings'] });
-    } catch {}
+      await qc.invalidateQueries({ queryKey: ['app_settings'] });
+    } catch (e) {
+      console.log('setSetting error', e);
+    }
   };
 
   const kasirAktif = settings?.kasir_aktif || '';
@@ -120,9 +123,12 @@ export default function SettingsScreen() {
               <Text style={s.kasirBadgeTxt}>{kasirAktif}</Text>
             </View>
           ) : null}
-          <View style={[s.shiftPill, { backgroundColor: shiftAktif === '1' ? '#F97316' : '#7C3AED' }]}>
+          <TouchableOpacity
+            style={[s.shiftPill, { backgroundColor: shiftAktif === '1' ? '#F97316' : '#7C3AED' }]}
+            onPress={() => setSetting('shift_aktif', shiftAktif === '1' ? '2' : '1')}
+          >
             <Text style={s.shiftPillTxt}>SHIFT {shiftAktif}</Text>
-          </View>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -304,21 +310,29 @@ function KasirSection({
       {/* Shift */}
       <Text style={s.sectionTitle}>PILIH SHIFT</Text>
       <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-        {['1', '2'].map(sh => (
-          <TouchableOpacity
-            key={sh}
-            style={[s.shiftBtn, shiftAktif === sh && s.shiftBtnActive]}
-            onPress={() => setSetting('shift_aktif', sh)}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="time-outline" size={22}
-              color={shiftAktif === sh ? C.white : C.gray} />
-            <Text style={[s.shiftBtnTxt, shiftAktif === sh && { color: C.white }]}>SHIFT {sh}</Text>
-            <Text style={[s.shiftBtnSub, shiftAktif === sh && { color: 'rgba(255,255,255,0.75)' }]}>
-              {sh === '1' ? '08:00 – 15:00' : '15:00 – 22:00'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {['1', '2'].map(sh => {
+          const isActive = shiftAktif === sh;
+          return (
+            <TouchableOpacity
+              key={sh}
+              style={[s.shiftBtn, isActive && s.shiftBtnActive]}
+              onPress={() => {
+                setSetting('shift_aktif', sh);
+              }}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="time-outline" size={22}
+                color={isActive ? C.white : C.gray} />
+              <Text style={[s.shiftBtnTxt, isActive && { color: C.white }]}>SHIFT {sh}</Text>
+              <Text style={[s.shiftBtnSub, isActive && { color: 'rgba(255,255,255,0.75)' }]}>
+                {sh === '1' ? '08:00 – 15:00' : '15:00 – 22:00'}
+              </Text>
+              {isActive && (
+                <Ionicons name="checkmark-circle" size={18} color={C.white} style={{ marginTop: 2 }} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Cabang */}

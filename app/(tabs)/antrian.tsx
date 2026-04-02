@@ -223,7 +223,8 @@ export default function AntrianScreen() {
       if (formSelectedSvc?.hasTP && !formTPName.trim()) throw new Error('Isi nama TP');
 
       const harga       = formIsFree ? 0 : formHarga;
-      const upahWasher  = formIsFree ? 0 : formUpahWasher;
+      // Cuci free: washer TETAP dapat upah (dihitung di pengeluaran free)
+      const upahWasher  = formUpahWasher;
       const pendTP      = formIsFree ? 0 : formPendapatanTP;
 
       await blink.db.antrian.create({
@@ -247,35 +248,35 @@ export default function AntrianScreen() {
         isFree:        formIsFree ? 1 : 0,
       });
 
-      // ── Auto-update closing aktif ──
+      // ── Auto-update closing aktif (non-blocking) ──
       try {
         const settingsRes = await blink.db.appSettings.list();
         const settingsMap: Record<string, string> = {};
-        (settingsRes as any[]).forEach((s: any) => { settingsMap[s.key] = s.value; });
+        (settingsRes as any[]).forEach((si: any) => { settingsMap[si.key] = si.value; });
         const closingId = settingsMap['closing_aktif_id'];
-        if (closingId) {
-          // Cek closing masih open
+        if (closingId && !formIsFree) {
           const closingRes = await blink.db.closingReports.get(closingId);
           const closing = closingRes as any;
           if (closing && closing.status === 'open' && closing.tanggal === today) {
-            // Upsert closing_item (grouping per service)
             const existingItems = await blink.db.closingItems.list({ where: { closingId } });
             const existItem = (existingItems as any[]).find(
               (it: any) => (it.serviceId || it.service_id) === formServiceId
             );
-            if (existItem && !formIsFree) {
-              const newQty    = (existItem.qty || 0) + 1;
+            if (existItem) {
+              const oldQty = existItem.qty || 0;
+              const newQty = oldQty + 1;
               const newJumlah = newQty * harga;
-              const newKas    = (existItem.kas || 0) + (formSelectedSvc?.kasDefault || 0);
-              const newPW     = (existItem.pendapatanWasher || existItem.pendapatan_washer || 0) + upahWasher;
-              const newPT     = (existItem.pendapatanTp || existItem.pendapatan_tp || 0) + pendTP;
+              const oldKas = existItem.kas || 0;
+              const newKas = oldKas + (formSelectedSvc?.kasDefault || 0);
+              const oldPW = existItem.pendapatanWasher || existItem.pendapatan_washer || 0;
+              const oldPT = existItem.pendapatanTp || existItem.pendapatan_tp || 0;
               await blink.db.closingItems.update(existItem.id, {
                 qty: newQty, jumlah: newJumlah, kas: newKas,
-                pendapatanWasher: newPW,
-                pendapatanTp: newPT,
+                pendapatanWasher: oldPW + upahWasher,
+                pendapatanTp: oldPT + pendTP,
                 namaTp: formTPName.trim() || existItem.namaTp || existItem.nama_tp || '',
               });
-            } else if (!formIsFree) {
+            } else {
               await blink.db.closingItems.create({
                 id:               `item_${Date.now()}_${Math.random().toString(36).slice(2)}`,
                 closingId,
@@ -291,10 +292,10 @@ export default function AntrianScreen() {
                 pendapatanTp:     pendTP,
               });
             }
-            // Update total_omset & jumlah_mobil di closing_reports
-            const allItems = await blink.db.closingItems.list({ where: { closingId } });
-            const newOmset = (allItems as any[]).reduce((s: number, it: any) => s + (it.jumlah || 0), 0) + (formIsFree ? 0 : harga);
-            const newJumlahMobil = (closing.jumlahMobil || 0) + 1;
+            // Re-fetch items for accurate omset
+            const updatedItems = await blink.db.closingItems.list({ where: { closingId } });
+            const newOmset = (updatedItems as any[]).reduce((acc: number, it: any) => acc + (it.jumlah || 0), 0);
+            const newJumlahMobil = (closing.jumlahMobil || closing.jumlah_mobil || 0) + 1;
             await blink.db.closingReports.update(closingId, {
               totalOmset:  newOmset,
               jumlahMobil: newJumlahMobil,
@@ -310,9 +311,12 @@ export default function AntrianScreen() {
       qc.invalidateQueries({ queryKey: ['antrian', today] });
       qc.invalidateQueries({ queryKey: ['closing_reports'] });
       qc.invalidateQueries({ queryKey: ['closing_items'] });
-      closeModal();
+      qc.invalidateQueries({ queryKey: ['antrian_closing'] });
+      Alert.alert('✅ Berhasil', 'Antrian berhasil ditambahkan', [
+        { text: 'OK', onPress: closeModal },
+      ]);
     },
-    onError:   (e: any) => Alert.alert('Error', e.message),
+    onError:   (e: any) => Alert.alert('⚠️ Error', e.message),
   });
 
   const statusMutation = useMutation({
@@ -441,7 +445,9 @@ export default function AntrianScreen() {
                   <Text style={s.rowPrice}>{fmt(item.harga)}</Text>
                 )}
                 <View style={{ width: 54, alignItems: 'flex-end' }}>
-                  {isFree ? null : (
+                  {isFree ? (
+                    upahWasher > 0 ? <Text style={[s.rowUpah, { color: C.red, fontSize: 9 }]}>{fmt(upahWasher)}</Text> : null
+                  ) : (
                     <>
                       {upahWasher > 0 && <Text style={s.rowUpah}>{fmt(upahWasher)}</Text>}
                       {pendTP > 0     && <Text style={s.rowTPVal}>+{fmt(pendTP)}</Text>}
@@ -760,7 +766,7 @@ export default function AntrianScreen() {
                   </Text>
                   <Text style={[s.freeSub, formIsFree && { color: '#FECACA' }]}>
                     {formIsFree
-                      ? 'Tidak masuk closing · Tercatat sebagai pengeluaran otomatis'
+                      ? 'Washer tetap dibayar · Upah masuk pengeluaran otomatis'
                       : 'Untuk karyawan, keluarga, atau tamu khusus'}
                   </Text>
                 </View>
@@ -850,7 +856,10 @@ export default function AntrianScreen() {
                 <SRow label="Washer"  val={formWasher || '-'} />
                 <View style={s.summaryDiv} />
                 {formIsFree
-                  ? <SRow label="Harga" val="🎁 FREE / GRATIS" vc={C.red} bold />
+                  ? <>
+                      <SRow label="Harga" val="🎁 FREE / GRATIS" vc={C.red} bold />
+                      {formUpahWasher > 0 && <SRow label="Upah Washer (peng. free)" val={`Rp ${fmt(formUpahWasher)}`} vc={C.red} />}
+                    </>
                   : <>
                       <SRow label="Harga"        val={`Rp ${fmt(formHarga)}`}        vc={C.orange} bold />
                       {formUpahWasher > 0 && <SRow label="Upah Washer" val={`Rp ${fmt(formUpahWasher)}`} vc={C.green} />}
@@ -900,8 +909,10 @@ export default function AntrianScreen() {
               <DR label="Layanan" val={selectedItem.serviceName} />
               <DR label="Harga"   val={Number((selectedItem as any).isFree) > 0 ? 'FREE' : `Rp ${fmt(selectedItem.harga)}`}
                   vc={Number((selectedItem as any).isFree) > 0 ? C.red : C.orange} />
-              {!Number((selectedItem as any).isFree) && (selectedItem as any).upahWasher > 0 && (
-                <DR label="Upah Washer" val={`Rp ${fmt((selectedItem as any).upahWasher)}`} vc={C.green} />
+              {(selectedItem as any).upahWasher > 0 && (
+                <DR label={Number((selectedItem as any).isFree) > 0 ? 'Upah Washer (pengeluaran free)' : 'Upah Washer'}
+                    val={`Rp ${fmt((selectedItem as any).upahWasher)}`}
+                    vc={Number((selectedItem as any).isFree) > 0 ? C.red : C.green} />
               )}
               {!Number((selectedItem as any).isFree) && (selectedItem as any).pendapatanTP > 0 && (
                 <DR label={`Upah TP (${(selectedItem as any).namaTP})`}
