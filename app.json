@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "blink-expo-starter",
+    "name": "O C W ",
     "slug": "orange-carwash",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -18,14 +18,14 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.blink.expostarter"
+      "bundleIdentifier": "com.orangecarwash.ocw"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.blink.expostarter"
+      "package": "com.orangecarwash.ocw"
     },
     "web": {
       "bundler": "metro",
